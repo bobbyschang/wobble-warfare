@@ -1,6 +1,6 @@
 # 🟢 Wobble Warfare
 
-A blob survival game co-created by **Bear** (Bobby) and **GitHub Copilot**.
+A blob survival game co-created by **Bear**, **Bobby**, and **GitHub Copilot CLI**.
 
 ## About the Game
 
