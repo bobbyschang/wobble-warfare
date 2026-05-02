@@ -2,11 +2,11 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Wobble Warfare</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+  body { background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; touch-action: none; }
   canvas { display: block; cursor: default; border: 2px solid #333; }
 </style>
 </head>
@@ -18,6 +18,51 @@ const ctx = canvas.getContext('2d');
 canvas.width = 960;
 canvas.height = 640;
 const CW = canvas.width, CH = canvas.height;
+
+// ── Mobile Detection & Responsive Canvas ───────────────
+const isMobile = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || (window.innerWidth <= 900 && 'ontouchstart' in window);
+let canvasScale = 1;
+let canvasOffsetX = 0, canvasOffsetY = 0;
+
+function resizeCanvas() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  const ratio = CW / CH;
+  let drawW, drawH;
+  if (w / h > ratio) {
+    drawH = h;
+    drawW = h * ratio;
+  } else {
+    drawW = w;
+    drawH = w / ratio;
+  }
+  canvas.style.width = drawW + 'px';
+  canvas.style.height = drawH + 'px';
+  canvasScale = CW / drawW;
+  canvasOffsetX = (w - drawW) / 2;
+  canvasOffsetY = (h - drawH) / 2;
+}
+if (isMobile) {
+  canvas.style.border = 'none';
+  resizeCanvas();
+  window.addEventListener('resize', resizeCanvas);
+}
+
+// ── Mobile Touch State ─────────────────────────────────
+let joystick = { active: false, startX: 0, startY: 0, curX: 0, curY: 0, touchId: null };
+let touchAimX = CW / 2, touchAimY = CH / 2;
+const JOYSTICK_RADIUS = 60;
+const JOYSTICK_POS = { x: 100, y: CH - 100 };
+const MOBILE_BUTTONS = [
+  { id: 'attack', label: '⚔️', x: CW - 80, y: CH - 100, radius: 35 },
+  { id: 'dash', label: '💨', x: CW - 160, y: CH - 100, radius: 30 },
+  { id: 'shockwave', label: '💥', x: CW - 80, y: CH - 180, radius: 30 },
+  { id: 'shop', label: '🛒', x: CW - 40, y: 40, radius: 22 },
+  { id: 'crystal', label: '💎', x: CW - 90, y: 40, radius: 22 },
+];
+let mobileButtonStates = {};
+MOBILE_BUTTONS.forEach(b => mobileButtonStates[b.id] = false);
+let lastTouchScrollY = null;
 
 // ── Game Screens ───────────────────────────────────────
 // 'title' | 'playing' | 'shop' | 'dead'
@@ -159,11 +204,91 @@ const UPGRADES = {
   }
 };
 
+// ── Classes ────────────────────────────────────────────
+const CLASSES = {
+  tank: {
+    name: 'Tank',
+    icon: '🛡️',
+    color: '#4a8',
+    desc: '+30% Max HP, +20% Shield, -15% Speed',
+    hpMult: 1.3, shieldMult: 1.2, speedMult: 0.85, dmgMult: 1.0, rangeMult: 1.0, swordMult: 1.0,
+    hasAxe: false
+  },
+  ranger: {
+    name: 'Ranger',
+    icon: '🔮',
+    color: '#a6f',
+    desc: '+20% Weapon DMG, +15% Range, -20% Sword DMG',
+    hpMult: 1.0, shieldMult: 1.0, speedMult: 1.0, dmgMult: 1.2, rangeMult: 1.15, swordMult: 0.8,
+    hasAxe: false
+  },
+  speedster: {
+    name: 'Speedster',
+    icon: '⚡',
+    color: '#ff0',
+    desc: '+25% Speed, -30% Dash CD, -15% Max HP',
+    hpMult: 0.85, shieldMult: 1.0, speedMult: 1.25, dmgMult: 1.0, rangeMult: 1.0, swordMult: 1.0,
+    dashCdMult: 0.7, hasAxe: false
+  },
+  viking: {
+    name: 'Viking',
+    icon: '🪓',
+    color: '#c73',
+    desc: 'Viking need no silly ability',
+    hpMult: 1.0, shieldMult: 1.0, speedMult: 1.0, dmgMult: 1.0, rangeMult: 1.0, swordMult: 1.0,
+    hasAxe: true
+  },
+  zombie: {
+    name: 'Zombie',
+    icon: '🧟',
+    color: '#4a4',
+    desc: 'Slower but natural HP regen. Zombies ignore you until attacked',
+    hpMult: 1.0, shieldMult: 1.0, speedMult: 0.8, dmgMult: 1.0, rangeMult: 1.0, swordMult: 1.0,
+    hasAxe: false, passive: true, regenRate: 1.5
+  }
+};
+let selectedClass = null; // set during class select screen
+
+// ── Crystal Upgrades ───────────────────────────────────
+const CRYSTAL_UPGRADES = {
+  shockwave: {
+    name: 'Shockwave',
+    icon: '💥',
+    maxLevel: 5,
+    costs: [3, 6, 12, 20, 35],
+    radiusBonus: [0, 30, 60, 100, 150, 220],
+    dmgBonus: [0, 3, 7, 12, 20, 30],
+    cdReduction: [1, 0.9, 0.8, 0.7, 0.55, 0.4],
+    desc: lvl => lvl === 0 ? 'Base shockwave' : `+${CRYSTAL_UPGRADES.shockwave.radiusBonus[lvl]} radius, +${CRYSTAL_UPGRADES.shockwave.dmgBonus[lvl]} DMG, -${Math.round((1-CRYSTAL_UPGRADES.shockwave.cdReduction[lvl])*100)}% CD`
+  },
+  dash: {
+    name: 'Dash',
+    icon: '💨',
+    maxLevel: 5,
+    costs: [2, 5, 10, 18, 30],
+    speedBonus: [0, 2, 4, 6, 9, 13],
+    durationBonus: [0, 2, 4, 6, 9, 12],
+    cdReduction: [1, 0.88, 0.76, 0.64, 0.5, 0.35],
+    desc: lvl => lvl === 0 ? 'Base dash' : `+${CRYSTAL_UPGRADES.dash.speedBonus[lvl]} speed, +${CRYSTAL_UPGRADES.dash.durationBonus[lvl]} dur, -${Math.round((1-CRYSTAL_UPGRADES.dash.cdReduction[lvl])*100)}% CD`
+  },
+  vitality: {
+    name: 'Vitality',
+    icon: '💖',
+    maxLevel: 5,
+    costs: [3, 7, 14, 22, 38],
+    regenRate: [0, 0.3, 0.6, 1.0, 1.5, 2.2],
+    hpBonus: [0, 20, 50, 90, 150, 230],
+    desc: lvl => lvl === 0 ? 'No regen' : `+${CRYSTAL_UPGRADES.vitality.hpBonus[lvl]} HP, regen ${CRYSTAL_UPGRADES.vitality.regenRate[lvl].toFixed(1)} HP/s`
+  }
+};
+
 // ── Player / Game State ────────────────────────────────
 let player, zombies, particles, floatingTexts, bullets;
 let xpOrbs, acidBullets;
 let wave, zombiesLeft, spawnTimer, score;
 let xp, xpToNext, level, money;
+let crystals = 0;
+let crystalUpgradeLevels = { shockwave: 0, dash: 0, vitality: 0 };
 let upgradeLevels;
 let swinging, swingTimer, autoSwingCooldown, gunCooldown;
 let bossActive;
@@ -176,14 +301,22 @@ let shopScroll;
 const DASH_COOLDOWN_MAX = 120, DASH_DURATION = 10, DASH_SPEED = 12;
 let shockwaveCooldown, shockwaveEffect;
 const SHOCKWAVE_COOLDOWN_MAX = 480, SHOCKWAVE_RADIUS = 150;
+let axeSwinging = false, axeSwingTimer = 0;
+const AXE_SWING_DURATION = 40;
+const AXE_COOLDOWN_MAX = 90;
+let axeCooldown = 0;
 let stats;
 let mouse = { x: CW / 2, y: CH / 2 };
 const keys = {};
 const SWING_DURATION = 15;
 const SWORD_ARC = Math.PI * 0.8;
+let classSelectHover = -1;
+let crystalShopSelection = 0;
+let regenAccumulator = 0;
 
 function xpForLevel(lvl) { return Math.floor(50 * Math.pow(lvl, 1.4)); }
 function moneyForLevel(lvl) { return 8 + lvl * 4; }
+function crystalsForLevel(lvl) { return Math.floor(1 + lvl * 0.4 + Math.random() * 2); }
 
 function init() {
   upgradeLevels = { sword: 0, shield: 0, health: 0, autoSlash: 0, gun: 0, magnet: 0, boomerang: 0, lightning: 0, orbital: 0, flamethrower: 0, freeze: 0, poison: 0 };
@@ -191,14 +324,20 @@ function init() {
   level = 1;
   xpToNext = xpForLevel(level);
   money = 0;
-  resetRun();
+  if (!selectedClass) {
+    screen = 'classSelect';
+  } else {
+    resetRun();
+  }
 }
 
 function resetRun() {
-  let maxHp = 100 + UPGRADES.health.bonus[upgradeLevels.health];
+  let cls = CLASSES[selectedClass] || CLASSES.tank;
+  let crystalHpBonus = CRYSTAL_UPGRADES.vitality.hpBonus[crystalUpgradeLevels.vitality];
+  let maxHp = Math.floor((100 + UPGRADES.health.bonus[upgradeLevels.health] + crystalHpBonus) * cls.hpMult);
   player = {
     x: CW / 2, y: CH / 2,
-    radius: 20, speed: 3.2, baseSpeed: 3.2,
+    radius: 20, speed: 3.2 * cls.speedMult, baseSpeed: 3.2 * cls.speedMult,
     hp: maxHp, maxHp: maxHp,
     angle: 0, iFrames: 0, damageFlash: 0
   };
@@ -225,6 +364,10 @@ function resetRun() {
   dashVy = 0;
   shockwaveCooldown = 0;
   shockwaveEffect = 0;
+  axeSwinging = false;
+  axeSwingTimer = 0;
+  axeCooldown = 0;
+  regenAccumulator = 0;
   boomerangs = [];
   lightningEffects = [];
   poisonClouds = [];
@@ -247,12 +390,23 @@ window.addEventListener('keydown', e => {
   keys[e.key.toLowerCase()] = true;
   if (screen === 'playing' && e.key === ' ') {
     e.preventDefault();
-    if (!swinging) {
+    let cls = CLASSES[selectedClass] || CLASSES.tank;
+    if (cls.hasAxe) {
+      if (!axeSwinging && axeCooldown <= 0) {
+        axeSwinging = true;
+        axeSwingTimer = AXE_SWING_DURATION;
+      }
+    } else if (!swinging) {
       swinging = true;
       swingTimer = SWING_DURATION;
     }
   } else if (screen === 'playing' && e.key === 'Shift') {
     // Dash
+    let cls = CLASSES[selectedClass] || CLASSES.tank;
+    let dashLvl = crystalUpgradeLevels.dash;
+    let effCooldownMax = Math.floor(DASH_COOLDOWN_MAX * CRYSTAL_UPGRADES.dash.cdReduction[dashLvl] * (cls.dashCdMult || 1));
+    let effDuration = DASH_DURATION + CRYSTAL_UPGRADES.dash.durationBonus[dashLvl];
+    let effSpeed = DASH_SPEED + CRYSTAL_UPGRADES.dash.speedBonus[dashLvl];
     if (dashCooldown <= 0 && dashTimer <= 0) {
       let ddx = 0, ddy = 0;
       if (keys['w'] || keys['arrowup']) ddy -= 1;
@@ -264,23 +418,26 @@ window.addEventListener('keydown', e => {
         ddy = Math.sin(player.angle);
       }
       let dlen = Math.sqrt(ddx * ddx + ddy * ddy);
-      dashVx = (ddx / dlen) * DASH_SPEED;
-      dashVy = (ddy / dlen) * DASH_SPEED;
-      dashTimer = DASH_DURATION;
-      dashCooldown = DASH_COOLDOWN_MAX;
-      player.iFrames = Math.max(player.iFrames, DASH_DURATION + 5);
+      dashVx = (ddx / dlen) * effSpeed;
+      dashVy = (ddy / dlen) * effSpeed;
+      dashTimer = effDuration;
+      dashCooldown = effCooldownMax;
+      player.iFrames = Math.max(player.iFrames, effDuration + 5);
       stats.dashesUsed++;
     }
   } else if (screen === 'playing' && e.key.toLowerCase() === 'q') {
     // Shockwave
+    let swLvl = crystalUpgradeLevels.shockwave;
+    let effCd = Math.floor(SHOCKWAVE_COOLDOWN_MAX * CRYSTAL_UPGRADES.shockwave.cdReduction[swLvl]);
     if (shockwaveCooldown <= 0) {
-      let swDmg = 5 + wave;
-      shockwaveCooldown = SHOCKWAVE_COOLDOWN_MAX;
+      let swRadius = SHOCKWAVE_RADIUS + CRYSTAL_UPGRADES.shockwave.radiusBonus[swLvl];
+      let swDmg = 5 + wave + CRYSTAL_UPGRADES.shockwave.dmgBonus[swLvl];
+      shockwaveCooldown = effCd;
       shockwaveEffect = 20;
       stats.shockwavesUsed++;
       for (let z of zombies) {
         let d = Math.hypot(z.x - player.x, z.y - player.y);
-        if (d < SHOCKWAVE_RADIUS) {
+        if (d < swRadius) {
           z.hp -= swDmg;
           z.hitFlash = 8;
           stats.damageDealt += swDmg;
@@ -296,6 +453,21 @@ window.addEventListener('keydown', e => {
     screen = 'shop';
     shopSelection = 0;
     shopScroll = 0;
+  } else if (screen === 'playing' && e.key.toLowerCase() === 'c') {
+    screen = 'crystalShop';
+    crystalShopSelection = 0;
+  } else if (screen === 'crystalShop') {
+    let cKeys = Object.keys(CRYSTAL_UPGRADES);
+    if (e.key.toLowerCase() === 'c' || e.key === 'Escape') {
+      screen = 'playing';
+    } else if (e.key === 'ArrowUp' || e.key.toLowerCase() === 'w') {
+      crystalShopSelection = (crystalShopSelection - 1 + cKeys.length) % cKeys.length;
+    } else if (e.key === 'ArrowDown' || e.key.toLowerCase() === 's') {
+      crystalShopSelection = (crystalShopSelection + 1) % cKeys.length;
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      buyCrystalUpgrade(cKeys[crystalShopSelection]);
+    }
   } else if (screen === 'playing' && e.key === '9') {
     // Cheat: clear all zombies, skip to next wave
     zombies.length = 0;
@@ -342,7 +514,23 @@ canvas.addEventListener('mousemove', e => {
 
 canvas.addEventListener('mousedown', e => {
   if (screen === 'title') {
-    resetRun();
+    screen = 'classSelect';
+    classSelectHover = -1;
+    return;
+  }
+  if (screen === 'classSelect') {
+    let classKeys = Object.keys(CLASSES);
+    let startX = CW/2 - (classKeys.length * 140) / 2 + 70;
+    for (let i = 0; i < classKeys.length; i++) {
+      let cx = startX + i * 140;
+      let cy = CH/2 + 20;
+      if (Math.abs(mouse.x - cx) < 65 && Math.abs(mouse.y - cy) < 80) {
+        selectedClass = classKeys[i];
+        screen = 'playing';
+        init();
+        return;
+      }
+    }
     return;
   }
   if (screen === 'dead') {
@@ -372,6 +560,33 @@ canvas.addEventListener('mousedown', e => {
     }
     return;
   }
+  if (screen === 'crystalShop') {
+    let cKeys = Object.keys(CRYSTAL_UPGRADES);
+    let startY = 150;
+    let itemSpacing = 80;
+    for (let i = 0; i < cKeys.length; i++) {
+      let iy = startY + i * itemSpacing;
+      if (mouse.x > CW/2 - 250 && mouse.x < CW/2 + 250 && mouse.y > iy && mouse.y < iy + 65) {
+        crystalShopSelection = i;
+        buyCrystalUpgrade(cKeys[i]);
+        return;
+      }
+    }
+    return;
+  }
+  // Playing state: attack on click
+  if (screen === 'playing') {
+    let cls = CLASSES[selectedClass] || CLASSES.tank;
+    if (cls.hasAxe) {
+      if (!axeSwinging && axeCooldown <= 0) {
+        axeSwinging = true;
+        axeSwingTimer = AXE_SWING_DURATION;
+      }
+    } else if (!swinging) {
+      swinging = true;
+      swingTimer = SWING_DURATION;
+    }
+  }
 });
 
 canvas.addEventListener('wheel', e => {
@@ -382,6 +597,196 @@ canvas.addEventListener('wheel', e => {
     shopScroll = Math.max(0, Math.min(maxScroll, shopScroll + e.deltaY * 0.5));
   }
 }, { passive: false });
+
+// ── Mobile Touch Input ─────────────────────────────────
+function getTouchCanvasPos(touch) {
+  const r = canvas.getBoundingClientRect();
+  return {
+    x: (touch.clientX - r.left) * (CW / r.width),
+    y: (touch.clientY - r.top) * (CH / r.height)
+  };
+}
+
+if (isMobile) {
+  canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    for (let t of e.changedTouches) {
+      let pos = getTouchCanvasPos(t);
+
+      // Title / class select / dead screens — tap anywhere
+      if (screen === 'title') { screen = 'classSelect'; classSelectHover = -1; return; }
+      if (screen === 'classSelect') {
+        let classKeys = Object.keys(CLASSES);
+        let startX = CW/2 - (classKeys.length * 140) / 2 + 70;
+        for (let i = 0; i < classKeys.length; i++) {
+          let cx = startX + i * 140;
+          let cy = CH/2 + 20;
+          if (Math.abs(pos.x - cx) < 65 && Math.abs(pos.y - cy) < 80) {
+            selectedClass = classKeys[i];
+            screen = 'playing';
+            init();
+            return;
+          }
+        }
+        return;
+      }
+      if (screen === 'dead') { screen = 'shop'; shopSelection = 0; shopScroll = 0; return; }
+
+      // Shop screens — handle tap on items
+      if (screen === 'shop') {
+        let itemKeys = Object.keys(UPGRADES);
+        let startY = 140, itemSpacing = 50;
+        for (let i = 0; i < itemKeys.length; i++) {
+          let iy = startY + i * itemSpacing - shopScroll;
+          if (iy < 130 || iy > 560) continue;
+          if (pos.x > CW/2 - 250 && pos.x < CW/2 + 250 && pos.y > iy - 5 && pos.y < iy + itemSpacing - 2) {
+            shopSelection = i;
+            buyUpgrade(itemKeys[i]);
+            return;
+          }
+        }
+        // Play button
+        let totalH = itemKeys.length * itemSpacing;
+        let playBtnY = startY + totalH + 10 - shopScroll;
+        if (pos.y > playBtnY - 10 && pos.y < playBtnY + 50) {
+          if (player.hp <= 0) { resetRun(); } else { screen = 'playing'; }
+        }
+        return;
+      }
+      if (screen === 'crystalShop') {
+        let cKeys = Object.keys(CRYSTAL_UPGRADES);
+        let startY = 150, itemSpacing = 80;
+        for (let i = 0; i < cKeys.length; i++) {
+          let iy = startY + i * itemSpacing;
+          if (pos.x > CW/2 - 260 && pos.x < CW/2 + 260 && pos.y > iy && pos.y < iy + 65) {
+            crystalShopSelection = i;
+            buyCrystalUpgrade(cKeys[i]);
+            return;
+          }
+        }
+        // Tap top area to close
+        if (pos.y > CH - 60) { screen = 'playing'; }
+        return;
+      }
+
+      // Playing state: check buttons first
+      if (screen === 'playing') {
+        let hitBtn = false;
+        for (let btn of MOBILE_BUTTONS) {
+          if (Math.hypot(pos.x - btn.x, pos.y - btn.y) < btn.radius + 10) {
+            hitBtn = true;
+            mobileButtonStates[btn.id] = true;
+            if (btn.id === 'attack') {
+              let cls = CLASSES[selectedClass] || CLASSES.tank;
+              if (cls.hasAxe) {
+                if (!axeSwinging && axeCooldown <= 0) { axeSwinging = true; axeSwingTimer = AXE_SWING_DURATION; }
+              } else if (!swinging) { swinging = true; swingTimer = SWING_DURATION; }
+            } else if (btn.id === 'dash') {
+              let cls = CLASSES[selectedClass] || CLASSES.tank;
+              let dashLvl = crystalUpgradeLevels.dash;
+              let effCooldownMax = Math.floor(DASH_COOLDOWN_MAX * CRYSTAL_UPGRADES.dash.cdReduction[dashLvl] * (cls.dashCdMult || 1));
+              let effDuration = DASH_DURATION + CRYSTAL_UPGRADES.dash.durationBonus[dashLvl];
+              let effSpeed = DASH_SPEED + CRYSTAL_UPGRADES.dash.speedBonus[dashLvl];
+              if (dashCooldown <= 0 && dashTimer <= 0) {
+                let ddx = joystick.active ? (joystick.curX - joystick.startX) : 0;
+                let ddy = joystick.active ? (joystick.curY - joystick.startY) : 0;
+                if (Math.abs(ddx) < 5 && Math.abs(ddy) < 5) { ddx = Math.cos(player.angle); ddy = Math.sin(player.angle); }
+                let dlen = Math.sqrt(ddx * ddx + ddy * ddy) || 1;
+                dashVx = (ddx / dlen) * effSpeed;
+                dashVy = (ddy / dlen) * effSpeed;
+                dashTimer = effDuration;
+                dashCooldown = effCooldownMax;
+                player.iFrames = Math.max(player.iFrames, effDuration + 5);
+                stats.dashesUsed++;
+              }
+            } else if (btn.id === 'shockwave') {
+              let swLvl = crystalUpgradeLevels.shockwave;
+              let effCd = Math.floor(SHOCKWAVE_COOLDOWN_MAX * CRYSTAL_UPGRADES.shockwave.cdReduction[swLvl]);
+              if (shockwaveCooldown <= 0) {
+                let swRadius = SHOCKWAVE_RADIUS + CRYSTAL_UPGRADES.shockwave.radiusBonus[swLvl];
+                let swDmg = 5 + wave + CRYSTAL_UPGRADES.shockwave.dmgBonus[swLvl];
+                shockwaveCooldown = effCd;
+                shockwaveEffect = 20;
+                stats.shockwavesUsed++;
+                for (let z of zombies) {
+                  let d = Math.hypot(z.x - player.x, z.y - player.y);
+                  if (d < swRadius) {
+                    z.hp -= swDmg; z.hitFlash = 8; stats.damageDealt += swDmg;
+                    let a = Math.atan2(z.y - player.y, z.x - player.x);
+                    let kb = z.isBoss ? 15 : 30;
+                    z.x += Math.cos(a) * kb; z.y += Math.sin(a) * kb;
+                  }
+                }
+                spawnParticles(player.x, player.y, '#4af', 20);
+              }
+            } else if (btn.id === 'shop') {
+              screen = 'shop'; shopSelection = 0; shopScroll = 0;
+            } else if (btn.id === 'crystal') {
+              screen = 'crystalShop'; crystalShopSelection = 0;
+            }
+            break;
+          }
+        }
+        // Joystick — left side of screen
+        if (!hitBtn && pos.x < CW / 2) {
+          joystick.active = true;
+          joystick.touchId = t.identifier;
+          joystick.startX = pos.x;
+          joystick.startY = pos.y;
+          joystick.curX = pos.x;
+          joystick.curY = pos.y;
+        }
+        // Tap right side (not on a button) = aim toward that point
+        if (!hitBtn && pos.x >= CW / 2) {
+          touchAimX = pos.x;
+          touchAimY = pos.y;
+          player.angle = Math.atan2(pos.y - player.y, pos.x - player.x);
+        }
+      }
+    }
+  }, { passive: false });
+
+  canvas.addEventListener('touchmove', e => {
+    e.preventDefault();
+    for (let t of e.changedTouches) {
+      let pos = getTouchCanvasPos(t);
+      if (joystick.active && t.identifier === joystick.touchId) {
+        joystick.curX = pos.x;
+        joystick.curY = pos.y;
+      }
+      // Shop scroll via drag
+      if (screen === 'shop') {
+        let itemKeys = Object.keys(UPGRADES);
+        let maxScroll = Math.max(0, itemKeys.length * 50 + 60 - 420);
+        if (lastTouchScrollY !== null) {
+          shopScroll = Math.max(0, Math.min(maxScroll, shopScroll - (pos.y - lastTouchScrollY)));
+        }
+        lastTouchScrollY = pos.y;
+      }
+    }
+  }, { passive: false });
+
+  canvas.addEventListener('touchend', e => {
+    for (let t of e.changedTouches) {
+      if (joystick.active && t.identifier === joystick.touchId) {
+        joystick.active = false;
+        joystick.touchId = null;
+      }
+      // Reset button states
+      for (let btn of MOBILE_BUTTONS) {
+        mobileButtonStates[btn.id] = false;
+      }
+    }
+    lastTouchScrollY = null;
+  });
+
+  canvas.addEventListener('touchcancel', e => {
+    joystick.active = false;
+    joystick.touchId = null;
+    lastTouchScrollY = null;
+    for (let btn of MOBILE_BUTTONS) mobileButtonStates[btn.id] = false;
+  });
+}
 
 function ensureShopSelectionVisible() {
   let itemSpacing = 50;
@@ -406,6 +811,26 @@ function buyUpgrade(key) {
     // Apply health upgrade immediately
     if (key === 'health') {
       let newMax = 100 + UPGRADES.health.bonus[upgradeLevels.health];
+      let diff = newMax - player.maxHp;
+      player.maxHp = newMax;
+      player.hp = Math.min(player.hp + diff, player.maxHp);
+    }
+  }
+}
+
+// ── Crystal Shop ───────────────────────────────────────
+function buyCrystalUpgrade(key) {
+  let up = CRYSTAL_UPGRADES[key];
+  let lvl = crystalUpgradeLevels[key];
+  if (lvl >= up.maxLevel) return;
+  let cost = up.costs[lvl];
+  if (crystals >= cost) {
+    crystals -= cost;
+    crystalUpgradeLevels[key]++;
+    // Apply vitality HP bonus immediately
+    if (key === 'vitality') {
+      let cls = CLASSES[selectedClass] || CLASSES.tank;
+      let newMax = Math.floor((100 + UPGRADES.health.bonus[upgradeLevels.health] + CRYSTAL_UPGRADES.vitality.hpBonus[crystalUpgradeLevels.vitality]) * cls.hpMult);
       let diff = newMax - player.maxHp;
       player.maxHp = newMax;
       player.hp = Math.min(player.hp + diff, player.maxHp);
@@ -481,7 +906,8 @@ function spawnZombie() {
     chargeVx: 0, chargeVy: 0,
     zombieType: type, ghostPhase: 0, ghostSolid: true, necroTimer: 0,
     exploded: false, spitCooldown: 60 + Math.floor(Math.random() * 60),
-    burnTimer: 0, burnDmg: 0, slowTimer: 0, slowFactor: 1
+    burnTimer: 0, burnDmg: 0, slowTimer: 0, slowFactor: 1,
+    aggro: !(CLASSES[selectedClass] && CLASSES[selectedClass].passive)
   };
 
   // Type-specific stat adjustments
@@ -533,7 +959,8 @@ function spawnMiniZombie(parentX, parentY, parentWave) {
     chargeVx: 0, chargeVy: 0,
     zombieType: 'mini', ghostPhase: 0, ghostSolid: true, necroTimer: 0,
     exploded: false, spitCooldown: 999,
-    burnTimer: 0, burnDmg: 0, slowTimer: 0, slowFactor: 1
+    burnTimer: 0, burnDmg: 0, slowTimer: 0, slowFactor: 1,
+    aggro: !(CLASSES[selectedClass] && CLASSES[selectedClass].passive)
   });
 }
 
@@ -587,7 +1014,8 @@ function spawnBoss() {
     necroTimer: bossInfo.id === 'necro_lord' ? 150 : 0,
     exploded: false, spitCooldown: bossInfo.id === 'inferno' ? 80 : 999,
     fireTrailTimer: 0, frozenAuraTimer: 0, hydraPhase: 0,
-    burnTimer: 0, burnDmg: 0, slowTimer: 0, slowFactor: 1
+    burnTimer: 0, burnDmg: 0, slowTimer: 0, slowFactor: 1,
+    aggro: true
   });
 }
 
@@ -623,6 +1051,22 @@ function update() {
   if (dashCooldown > 0) dashCooldown--;
   if (shockwaveCooldown > 0) shockwaveCooldown--;
   if (shockwaveEffect > 0) shockwaveEffect--;
+  if (axeCooldown > 0) axeCooldown--;
+
+  // Crystal vitality HP regen
+  let vitalLvl = crystalUpgradeLevels.vitality;
+  let totalRegenRate = CRYSTAL_UPGRADES.vitality.regenRate[vitalLvl];
+  // Zombie class natural regen
+  let curCls = CLASSES[selectedClass] || CLASSES.tank;
+  if (curCls.regenRate) totalRegenRate += curCls.regenRate;
+  if (totalRegenRate > 0 && player.hp < player.maxHp) {
+    regenAccumulator += totalRegenRate / 60;
+    if (regenAccumulator >= 1) {
+      let heal = Math.floor(regenAccumulator);
+      player.hp = Math.min(player.hp + heal, player.maxHp);
+      regenAccumulator -= heal;
+    }
+  }
 
   // Player movement (skip during dash)
   player.speed = player.baseSpeed; // reset speed each frame before boss effects
@@ -632,6 +1076,16 @@ function update() {
     if (keys['s'] || keys['arrowdown']) dy += 1;
     if (keys['a'] || keys['arrowleft']) dx -= 1;
     if (keys['d'] || keys['arrowright']) dx += 1;
+    // Mobile joystick input
+    if (isMobile && joystick.active) {
+      let jdx = joystick.curX - joystick.startX;
+      let jdy = joystick.curY - joystick.startY;
+      let jdist = Math.sqrt(jdx * jdx + jdy * jdy);
+      if (jdist > 10) {
+        dx += jdx / jdist;
+        dy += jdy / jdist;
+      }
+    }
     if (dx || dy) {
       let len = Math.sqrt(dx * dx + dy * dy);
       player.x += (dx / len) * player.speed;
@@ -640,7 +1094,23 @@ function update() {
   }
   player.x = Math.max(player.radius, Math.min(CW - player.radius, player.x));
   player.y = Math.max(player.radius, Math.min(CH - player.radius, player.y));
-  player.angle = Math.atan2(mouse.y - player.y, mouse.x - player.x);
+  if (isMobile) {
+    // On mobile, aim toward closest zombie or last touch aim point
+    if (zombies.length > 0) {
+      let closestZ = null, closestD = Infinity;
+      for (let z of zombies) {
+        let d = Math.hypot(z.x - player.x, z.y - player.y);
+        if (d < closestD) { closestD = d; closestZ = z; }
+      }
+      if (closestZ && closestD < 300) {
+        player.angle = Math.atan2(closestZ.y - player.y, closestZ.x - player.x);
+      } else {
+        player.angle = Math.atan2(touchAimY - player.y, touchAimX - player.x);
+      }
+    }
+  } else {
+    player.angle = Math.atan2(mouse.y - player.y, mouse.x - player.x);
+  }
   if (player.iFrames > 0) player.iFrames--;
   if (player.damageFlash > 0) player.damageFlash--;
 
@@ -664,13 +1134,42 @@ function update() {
   }
 
   // Sword stats from upgrade
+  let cls = CLASSES[selectedClass] || CLASSES.tank;
   let swordLvl = upgradeLevels.sword;
   let swordLen = UPGRADES.sword.length[swordLvl];
-  let swordDmg = UPGRADES.sword.damage[swordLvl];
+  let swordDmg = Math.floor(UPGRADES.sword.damage[swordLvl] * cls.swordMult);
   let swordKB  = UPGRADES.sword.knockback[swordLvl];
 
-  // Sword swing
-  if (swinging) {
+  // Viking Axe attack (replaces sword for Viking class)
+  if (cls.hasAxe) {
+    if (axeSwinging) {
+      axeSwingTimer--;
+      let progress = 1 - axeSwingTimer / AXE_SWING_DURATION;
+      let curAngle = player.angle - Math.PI * 0.6 + Math.PI * 1.2 * progress;
+      let axeLen = 80;
+      for (let z of zombies) {
+        if (z.zombieType === 'ghost' && !z.ghostSolid) continue;
+        let toZ = Math.atan2(z.y - player.y, z.x - player.x);
+        let dist = Math.hypot(z.x - player.x, z.y - player.y);
+        let aDiff = Math.abs(angleDelta(curAngle, toZ));
+        if (dist < axeLen + z.radius + player.radius && aDiff < 0.4) {
+          if (z.hitFlash <= 0) {
+            z.hp = 0; // one-hit kill
+            z.hitFlash = 8;
+            stats.damageDealt += z.maxHp;
+            let a = Math.atan2(z.y - player.y, z.x - player.x);
+            z.x += Math.cos(a) * 20;
+            z.y += Math.sin(a) * 20;
+            spawnParticles(z.x, z.y, '#c73', 8);
+          }
+        }
+      }
+      if (axeSwingTimer <= 0) { axeSwinging = false; axeCooldown = AXE_COOLDOWN_MAX; }
+    }
+  }
+
+  // Sword swing (disabled for Viking — they use axe)
+  if (swinging && !cls.hasAxe) {
     swingTimer--;
     let progress = 1 - swingTimer / SWING_DURATION;
     let curAngle = player.angle - SWORD_ARC / 2 + SWORD_ARC * progress;
@@ -713,12 +1212,12 @@ function update() {
 
   // Shield reduction
   let shieldLvl = upgradeLevels.shield;
-  let dmgReduction = UPGRADES.shield.reduction[shieldLvl];
+  let dmgReduction = Math.min(0.9, UPGRADES.shield.reduction[shieldLvl] * cls.shieldMult);
 
   // Update zombies
   for (let i = zombies.length - 1; i >= 0; i--) {
     let z = zombies[i];
-    if (z.hitFlash > 0) z.hitFlash--;
+    if (z.hitFlash > 0) { z.hitFlash--; z.aggro = true; }
     if (z.attackCooldown > 0) z.attackCooldown--;
 
     // Burn DOT
@@ -890,35 +1389,42 @@ function update() {
         }
       }
     } else if (z.zombieType === 'spitter') {
-      // Stay at range ~200px, shoot acid
-      let distToPlayer = Math.hypot(z.x - player.x, z.y - player.y);
-      let a = Math.atan2(player.y - z.y, player.x - z.x);
-      if (distToPlayer > 220) {
-        z.x += Math.cos(a) * effSpeed;
-        z.y += Math.sin(a) * effSpeed;
-      } else if (distToPlayer < 160) {
-        z.x -= Math.cos(a) * effSpeed * 0.5;
-        z.y -= Math.sin(a) * effSpeed * 0.5;
-      }
-      z.spitCooldown--;
-      if (z.spitCooldown <= 0) {
-        let ba = Math.atan2(player.y - z.y, player.x - z.x);
-        acidBullets.push({
-          x: z.x, y: z.y,
-          vx: Math.cos(ba) * 3.5, vy: Math.sin(ba) * 3.5,
-          damage: Math.max(3, Math.floor(z.damage * 0.5)),
-          life: 90
-        });
-        z.spitCooldown = 80 + Math.floor(Math.random() * 40);
+      if (z.aggro) {
+        // Stay at range ~200px, shoot acid
+        let distToPlayer = Math.hypot(z.x - player.x, z.y - player.y);
+        let a = Math.atan2(player.y - z.y, player.x - z.x);
+        if (distToPlayer > 220) {
+          z.x += Math.cos(a) * effSpeed;
+          z.y += Math.sin(a) * effSpeed;
+        } else if (distToPlayer < 160) {
+          z.x -= Math.cos(a) * effSpeed * 0.5;
+          z.y -= Math.sin(a) * effSpeed * 0.5;
+        }
+        z.spitCooldown--;
+        if (z.spitCooldown <= 0) {
+          let ba = Math.atan2(player.y - z.y, player.x - z.x);
+          acidBullets.push({
+            x: z.x, y: z.y,
+            vx: Math.cos(ba) * 3.5, vy: Math.sin(ba) * 3.5,
+            damage: Math.max(3, Math.floor(z.damage * 0.5)),
+            life: 90
+          });
+          z.spitCooldown = 80 + Math.floor(Math.random() * 40);
+        }
+      } else {
+        if (!z.wanderAngle || Math.random() < 0.01) z.wanderAngle = Math.random() * Math.PI * 2;
+        z.x += Math.cos(z.wanderAngle) * effSpeed * 0.3;
+        z.y += Math.sin(z.wanderAngle) * effSpeed * 0.3;
       }
     } else if (z.zombieType === 'necromancer') {
-      // Stay at range, spawn walkers
-      let distToPlayer = Math.hypot(z.x - player.x, z.y - player.y);
-      let a = Math.atan2(player.y - z.y, player.x - z.x);
-      if (distToPlayer > 280) {
-        z.x += Math.cos(a) * effSpeed;
-        z.y += Math.sin(a) * effSpeed;
-      } else if (distToPlayer < 200) {
+      if (z.aggro) {
+        // Stay at range, spawn walkers
+        let distToPlayer = Math.hypot(z.x - player.x, z.y - player.y);
+        let a = Math.atan2(player.y - z.y, player.x - z.x);
+        if (distToPlayer > 280) {
+          z.x += Math.cos(a) * effSpeed;
+          z.y += Math.sin(a) * effSpeed;
+        } else if (distToPlayer < 200) {
         z.x -= Math.cos(a) * effSpeed * 0.5;
         z.y -= Math.sin(a) * effSpeed * 0.5;
       }
@@ -937,26 +1443,47 @@ function update() {
           chargeVx: 0, chargeVy: 0,
           zombieType: 'walker', ghostPhase: 0, ghostSolid: true, necroTimer: 0,
           exploded: false, spitCooldown: 999,
-          burnTimer: 0, burnDmg: 0, slowTimer: 0, slowFactor: 1
+          burnTimer: 0, burnDmg: 0, slowTimer: 0, slowFactor: 1,
+          aggro: !(CLASSES[selectedClass] && CLASSES[selectedClass].passive)
         });
         spawnParticles(sx, sy, '#808', 6);
         z.necroTimer = 200 + Math.floor(Math.random() * 100);
       }
+      } else {
+        if (!z.wanderAngle || Math.random() < 0.01) z.wanderAngle = Math.random() * Math.PI * 2;
+        z.x += Math.cos(z.wanderAngle) * effSpeed * 0.3;
+        z.y += Math.sin(z.wanderAngle) * effSpeed * 0.3;
+      }
     } else if (z.zombieType === 'exploder') {
-      // Rush at player, explode on contact
-      let a = Math.atan2(player.y - z.y, player.x - z.x);
-      z.x += Math.cos(a) * effSpeed;
-      z.y += Math.sin(a) * effSpeed;
+      if (z.aggro) {
+        // Rush at player, explode on contact
+        let a = Math.atan2(player.y - z.y, player.x - z.x);
+        z.x += Math.cos(a) * effSpeed;
+        z.y += Math.sin(a) * effSpeed;
+      } else {
+        if (!z.wanderAngle || Math.random() < 0.01) z.wanderAngle = Math.random() * Math.PI * 2;
+        z.x += Math.cos(z.wanderAngle) * effSpeed * 0.3;
+        z.y += Math.sin(z.wanderAngle) * effSpeed * 0.3;
+      }
     } else {
       // Default movement (walker, runner, tank, splitter, mini, ghost)
-      let a = Math.atan2(player.y - z.y, player.x - z.x);
-      z.x += Math.cos(a) * effSpeed;
-      z.y += Math.sin(a) * effSpeed;
+      if (z.aggro) {
+        let a = Math.atan2(player.y - z.y, player.x - z.x);
+        z.x += Math.cos(a) * effSpeed;
+        z.y += Math.sin(a) * effSpeed;
+      } else {
+        // Passive wander: drift slowly in a random direction
+        if (!z.wanderAngle || Math.random() < 0.01) z.wanderAngle = Math.random() * Math.PI * 2;
+        z.x += Math.cos(z.wanderAngle) * effSpeed * 0.3;
+        z.y += Math.sin(z.wanderAngle) * effSpeed * 0.3;
+        z.x = Math.max(z.radius, Math.min(CW - z.radius, z.x));
+        z.y = Math.max(z.radius, Math.min(CH - z.radius, z.y));
+      }
     }
 
     // Collision with player
     let dist = Math.hypot(z.x - player.x, z.y - player.y);
-    if (dist < z.radius + player.radius) {
+    if (dist < z.radius + player.radius && z.aggro) {
       // Exploder detonation
       if (z.zombieType === 'exploder' && !z.exploded) {
         z.exploded = true;
@@ -1088,8 +1615,10 @@ function update() {
         let reward = moneyForLevel(level);
         money += reward;
         stats.moneyEarned += reward;
+        let crystalReward = crystalsForLevel(level);
+        crystals += crystalReward;
         xpToNext = xpForLevel(level);
-        addFloatingText(player.x, player.y - 50, `LEVEL ${level}! +$${reward}`, '#ff0');
+        addFloatingText(player.x, player.y - 50, `LEVEL ${level}! +$${reward} +💎${crystalReward}`, '#ff0');
         spawnParticles(player.x, player.y, '#ff0', 15);
         player.hp = Math.min(player.hp + 15, player.maxHp);
       }
@@ -1102,7 +1631,7 @@ function update() {
   if (gunLvl > 0) {
     gunCooldown--;
     if (gunCooldown <= 0) {
-      let gunRange = UPGRADES.gun.range[gunLvl];
+      let gunRange = Math.floor(UPGRADES.gun.range[gunLvl] * cls.rangeMult);
       let closest = null, closestDist = Infinity;
       for (let z of zombies) {
         if (z.zombieType === 'ghost' && !z.ghostSolid) continue;
@@ -1117,7 +1646,7 @@ function update() {
         bullets.push({
           x: player.x, y: player.y,
           vx: Math.cos(a) * 8, vy: Math.sin(a) * 8,
-          damage: UPGRADES.gun.damage[gunLvl],
+          damage: Math.floor(UPGRADES.gun.damage[gunLvl] * cls.dmgMult),
           life: 60
         });
         gunCooldown = UPGRADES.gun.fireRate[gunLvl];
@@ -1452,7 +1981,9 @@ function draw() {
   ctx.fillRect(0, 0, CW, CH);
 
   if (screen === 'title') { drawTitle(); return; }
+  if (screen === 'classSelect') { drawClassSelect(); return; }
   if (screen === 'shop') { drawShop(); return; }
+  if (screen === 'crystalShop') { drawCrystalShop(); return; }
 
   drawArena();
 
@@ -1514,7 +2045,151 @@ function drawTitle() {
   ctx.fillStyle = '#666';
   ctx.font = '13px monospace';
   ctx.fillText('WASD to move  •  Mouse to aim  •  Space to slash  •  Shift to dash', CW/2, CH/2 + 120);
-  ctx.fillText('Q for shockwave  •  B for shop  •  Weapons auto-fire', CW/2, CH/2 + 140);
+  ctx.fillText('Q for shockwave  •  B for shop  •  C for crystal shop', CW/2, CH/2 + 140);
+}
+
+function drawClassSelect() {
+  drawGrid();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#5599ee';
+  ctx.font = 'bold 40px monospace';
+  ctx.fillText('CHOOSE YOUR CLASS', CW/2, 100);
+  ctx.fillStyle = '#888';
+  ctx.font = '14px monospace';
+  ctx.fillText('Click a class to begin', CW/2, 130);
+
+  let classKeys = Object.keys(CLASSES);
+  let startX = CW/2 - (classKeys.length * 140) / 2 + 70;
+
+  for (let i = 0; i < classKeys.length; i++) {
+    let key = classKeys[i];
+    let c = CLASSES[key];
+    let cx = startX + i * 140;
+    let cy = CH/2 + 20;
+    let hovered = Math.abs(mouse.x - cx) < 65 && Math.abs(mouse.y - cy) < 80;
+
+    // Card background
+    ctx.fillStyle = hovered ? '#2a2a4e' : '#1e1e3a';
+    ctx.strokeStyle = hovered ? c.color : '#444';
+    ctx.lineWidth = hovered ? 3 : 1;
+    roundRect(cx - 65, cy - 65, 130, 150, 8);
+    ctx.fill();
+    ctx.stroke();
+
+    // Icon
+    ctx.font = '36px monospace';
+    ctx.fillStyle = '#fff';
+    ctx.fillText(c.icon, cx, cy - 20);
+
+    // Name
+    ctx.font = 'bold 14px monospace';
+    ctx.fillStyle = c.color;
+    ctx.fillText(c.name, cx, cy + 15);
+
+    // Description — word-wrap within card
+    ctx.font = '9px monospace';
+    ctx.fillStyle = '#aaa';
+    let maxW = 115;
+    let descWords = c.desc.split(' ');
+    let lines = [];
+    let curLine = '';
+    for (let dw of descWords) {
+      let test = curLine ? curLine + ' ' + dw : dw;
+      if (ctx.measureText(test).width > maxW && curLine) {
+        lines.push(curLine);
+        curLine = dw;
+      } else {
+        curLine = test;
+      }
+    }
+    if (curLine) lines.push(curLine);
+    for (let li = 0; li < lines.length; li++) {
+      ctx.fillText(lines[li], cx, cy + 33 + li * 11);
+    }
+  }
+}
+
+function drawCrystalShop() {
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(0, 0, CW, CH);
+  drawGrid();
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#8cf';
+  ctx.font = 'bold 32px monospace';
+  ctx.fillText('💎 CRYSTAL UPGRADES', CW/2, 60);
+
+  ctx.fillStyle = '#4ef';
+  ctx.font = '16px monospace';
+  ctx.fillText(`Crystals: 💎 ${crystals}`, CW/2, 90);
+
+  ctx.fillStyle = '#666';
+  ctx.font = '12px monospace';
+  ctx.fillText(isMobile ? 'Tap bottom to close' : 'Press C or ESC to close', CW/2, 110);
+
+  let cKeys = Object.keys(CRYSTAL_UPGRADES);
+  let startY = 150;
+  let itemSpacing = 80;
+
+  for (let i = 0; i < cKeys.length; i++) {
+    let key = cKeys[i];
+    let up = CRYSTAL_UPGRADES[key];
+    let lvl = crystalUpgradeLevels[key];
+    let iy = startY + i * itemSpacing;
+    let selected = i === crystalShopSelection;
+
+    ctx.fillStyle = selected ? '#2a2a5a' : '#1a1a3a';
+    ctx.strokeStyle = selected ? '#4ef' : '#333';
+    ctx.lineWidth = selected ? 2 : 1;
+    roundRect(CW/2 - 250, iy, 500, 65, 6);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 18px monospace';
+    ctx.fillStyle = '#fff';
+    ctx.fillText(`${up.icon} ${up.name}`, CW/2 - 230, iy + 25);
+
+    ctx.font = '12px monospace';
+    ctx.fillStyle = '#aaa';
+    ctx.fillText(up.desc(lvl), CW/2 - 230, iy + 45);
+
+    ctx.textAlign = 'right';
+    ctx.font = '14px monospace';
+    if (lvl >= up.maxLevel) {
+      ctx.fillStyle = '#4f4';
+      ctx.fillText('MAX', CW/2 + 230, iy + 25);
+    } else {
+      let cost = up.costs[lvl];
+      ctx.fillStyle = crystals >= cost ? '#4ef' : '#f44';
+      ctx.fillText(`💎 ${cost}`, CW/2 + 230, iy + 25);
+    }
+    // Level bar
+    ctx.fillStyle = '#333';
+    roundRect(CW/2 + 100, iy + 38, 130, 10, 3);
+    ctx.fill();
+    ctx.fillStyle = '#4ef';
+    roundRect(CW/2 + 100, iy + 38, 130 * (lvl / up.maxLevel), 10, 3);
+    ctx.fill();
+    ctx.textAlign = 'center';
+    ctx.font = '9px monospace';
+    ctx.fillStyle = '#fff';
+    ctx.fillText(`${lvl}/${up.maxLevel}`, CW/2 + 165, iy + 47);
+  }
+  // Close button for mobile
+  if (isMobile) {
+    ctx.fillStyle = '#333';
+    roundRect(CW/2 - 80, CH - 55, 160, 40, 8);
+    ctx.fill();
+    ctx.strokeStyle = '#4ef';
+    ctx.lineWidth = 1;
+    roundRect(CW/2 - 80, CH - 55, 160, 40, 8);
+    ctx.stroke();
+    ctx.font = 'bold 14px monospace';
+    ctx.fillStyle = '#4ef';
+    ctx.fillText('✕ CLOSE', CW/2, CH - 30);
+  }
+  ctx.textAlign = 'center';
 }
 
 function drawArena() {
@@ -1782,10 +2457,27 @@ function drawArena() {
     }
   }
 
-  // Sword
+  // Sword / Axe
   let swordLen = UPGRADES.sword.length[upgradeLevels.sword];
   let swordColor = ['#dde','#cef','#aff','#8ff','#ff0','#f80','#f44','#f0f','#4ff','#fff','#ffd700'][upgradeLevels.sword];
-  if (swinging) {
+  let drawCls = CLASSES[selectedClass] || CLASSES.tank;
+  if (drawCls.hasAxe) {
+    // Draw Viking Axe
+    if (axeSwinging) {
+      let progress = 1 - axeSwingTimer / AXE_SWING_DURATION;
+      let aAngle = player.angle - Math.PI*0.6 + Math.PI*1.2 * progress;
+      drawAxe(aAngle, 1);
+      for (let t = 0; t < 3; t++) {
+        let tp = Math.max(0, progress - t * 0.06);
+        let ta = player.angle - Math.PI*0.6 + Math.PI*1.2 * tp;
+        ctx.globalAlpha = 0.12 - t * 0.03;
+        drawAxe(ta, 0.7);
+      }
+      ctx.globalAlpha = 1;
+    } else {
+      drawAxe(player.angle, axeCooldown > 0 ? 0.5 : 1);
+    }
+  } else if (swinging) {
     let progress = 1 - swingTimer / SWING_DURATION;
     let sAngle = player.angle - SWORD_ARC/2 + SWORD_ARC * progress;
     drawSword(sAngle, 1, swordLen, swordColor);
@@ -1949,11 +2641,13 @@ function drawArena() {
   ctx.textAlign = 'center';
   ctx.fillText(`LVL ${level}  (${xp}/${xpToNext} XP)`, xpX + xpBarW/2, xpY + 9);
 
-  // Money
+  // Money & Crystals
   ctx.textAlign = 'left';
   ctx.font = 'bold 14px monospace';
   ctx.fillStyle = '#fd0';
   ctx.fillText(`💰 $${money}`, 20, 72);
+  ctx.fillStyle = '#4ef';
+  ctx.fillText(`💎 ${crystals}`, 120, 72);
 
   // Dash cooldown indicator
   let cdY = 88;
@@ -2000,10 +2694,55 @@ function drawArena() {
   }
 
   // Shop hint
-  ctx.textAlign = 'center';
-  ctx.font = '12px monospace';
-  ctx.fillStyle = '#555';
-  ctx.fillText('[B] Shop  •  [Space] Slash  •  [Shift] Dash  •  [Q] Shockwave', CW/2, CH - 12);
+  if (!isMobile) {
+    ctx.textAlign = 'center';
+    ctx.font = '12px monospace';
+    ctx.fillStyle = '#555';
+    ctx.fillText('[B] Shop  •  [Space] Slash  •  [Shift] Dash  •  [Q] Shockwave', CW/2, CH - 12);
+  }
+
+  // Mobile touch controls overlay
+  if (isMobile && screen === 'playing') {
+    // Virtual joystick
+    let jx = joystick.active ? joystick.startX : JOYSTICK_POS.x;
+    let jy = joystick.active ? joystick.startY : JOYSTICK_POS.y;
+    ctx.globalAlpha = 0.3;
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(jx, jy, JOYSTICK_RADIUS, 0, Math.PI*2); ctx.stroke();
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = '#fff';
+    let knobX = jx, knobY = jy;
+    if (joystick.active) {
+      let jdx = joystick.curX - joystick.startX;
+      let jdy = joystick.curY - joystick.startY;
+      let jdist = Math.sqrt(jdx*jdx + jdy*jdy);
+      let clamp = Math.min(jdist, JOYSTICK_RADIUS);
+      if (jdist > 0) { knobX = jx + (jdx/jdist)*clamp; knobY = jy + (jdy/jdist)*clamp; }
+    }
+    ctx.beginPath(); ctx.arc(knobX, knobY, 20, 0, Math.PI*2); ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // Action buttons
+    for (let btn of MOBILE_BUTTONS) {
+      let isReady = true;
+      let opacity = 0.6;
+      if (btn.id === 'dash' && dashCooldown > 0) { isReady = false; opacity = 0.25; }
+      if (btn.id === 'shockwave' && shockwaveCooldown > 0) { isReady = false; opacity = 0.25; }
+      if (btn.id === 'attack' && (swinging || axeSwinging)) { opacity = 0.3; }
+      ctx.globalAlpha = opacity;
+      ctx.fillStyle = mobileButtonStates[btn.id] ? '#555' : '#333';
+      ctx.strokeStyle = isReady ? '#fff' : '#666';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(btn.x, btn.y, btn.radius, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+      ctx.globalAlpha = isReady ? 0.9 : 0.4;
+      ctx.textAlign = 'center';
+      ctx.font = `${btn.radius * 0.8}px monospace`;
+      ctx.fillStyle = '#fff';
+      ctx.fillText(btn.label, btn.x, btn.y + btn.radius * 0.3);
+      ctx.globalAlpha = 1;
+    }
+  }
 
   // High score
   if (highScore > 0) {
@@ -2118,7 +2857,7 @@ function drawShop() {
     ctx.font = 'bold 18px monospace';
     let pulse = 0.7 + Math.sin(titlePulse * 2) * 0.3;
     ctx.globalAlpha = pulse;
-    ctx.fillText('[ START OVER  —  B / ESC ]', CW/2, playBtnY + 20);
+    ctx.fillText(isMobile ? '[ TAP TO RESUME ]' : '[ START OVER  —  B / ESC ]', CW/2, playBtnY + 20);
     ctx.globalAlpha = 1;
   }
 
@@ -2143,7 +2882,7 @@ function drawShop() {
   ctx.textAlign = 'center';
   ctx.fillStyle = '#555';
   ctx.font = '11px monospace';
-  ctx.fillText('W/S or ↑/↓ to browse  •  Scroll wheel  •  Enter/Click to buy  •  B/Esc to close', CW/2, CH - 14);
+  ctx.fillText(isMobile ? 'Tap to buy  •  Scroll to browse' : 'W/S or ↑/↓ to browse  •  Scroll wheel  •  Enter/Click to buy  •  B/Esc to close', CW/2, CH - 14);
 }
 
 function drawDeathScreen() {
@@ -2244,6 +2983,38 @@ function drawSword(angle, alpha, len, bladeColor) {
   ctx.moveTo(player.radius+len-5,-2);
   ctx.lineTo(player.radius+len+3,0);
   ctx.lineTo(player.radius+len-5,2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawAxe(angle, alpha) {
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  ctx.translate(player.x, player.y);
+  ctx.rotate(angle);
+  // Handle
+  ctx.strokeStyle = '#8b5e3c';
+  ctx.lineWidth = 6;
+  ctx.beginPath(); ctx.moveTo(player.radius - 2, 0); ctx.lineTo(player.radius + 50, 0); ctx.stroke();
+  // Axe head
+  ctx.fillStyle = '#aaa';
+  ctx.beginPath();
+  ctx.moveTo(player.radius + 40, -2);
+  ctx.lineTo(player.radius + 55, -16);
+  ctx.lineTo(player.radius + 70, -12);
+  ctx.lineTo(player.radius + 72, 0);
+  ctx.lineTo(player.radius + 70, 12);
+  ctx.lineTo(player.radius + 55, 16);
+  ctx.lineTo(player.radius + 40, 2);
+  ctx.closePath();
+  ctx.fill();
+  // Edge highlight
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(player.radius + 55, -16);
+  ctx.lineTo(player.radius + 72, 0);
+  ctx.lineTo(player.radius + 55, 16);
   ctx.stroke();
   ctx.restore();
 }
