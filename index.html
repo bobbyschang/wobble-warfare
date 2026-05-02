@@ -1,0 +1,2280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wobble Warfare</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+  canvas { display: block; cursor: default; border: 2px solid #333; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+canvas.width = 960;
+canvas.height = 640;
+const CW = canvas.width, CH = canvas.height;
+
+// ── Game Screens ───────────────────────────────────────
+// 'title' | 'playing' | 'shop' | 'dead'
+let screen = 'title';
+let titlePulse = 0;
+
+// ── High Score ─────────────────────────────────────────
+let highScore = parseInt(localStorage.getItem('blobSurvivorHighScore') || '0');
+
+// ── Upgrade Definitions ────────────────────────────────
+const UPGRADES = {
+  sword: {
+    name: 'Sword',
+    icon: '⚔️',
+    maxLevel: 10,
+    costs:      [0, 30, 75, 150, 300, 500, 750, 1100, 1600, 2200],
+    damage:     [1, 2, 3, 5, 7, 10, 14, 18, 23, 29, 36],
+    length:     [55, 60, 68, 76, 85, 95, 106, 118, 131, 145, 160],
+    knockback:  [8, 10, 12, 15, 18, 22, 26, 31, 37, 44, 52],
+    desc: lvl => `DMG ${UPGRADES.sword.damage[lvl]}  LEN ${UPGRADES.sword.length[lvl]}`,
+    color: '#dde'
+  },
+  shield: {
+    name: 'Shield',
+    icon: '🛡️',
+    maxLevel: 10,
+    costs:      [25, 50, 100, 200, 400, 650, 1000, 1500, 2100, 2900],
+    reduction:  [0, 0.12, 0.22, 0.32, 0.42, 0.52, 0.58, 0.64, 0.70, 0.75, 0.80],
+    desc: lvl => lvl === 0 ? 'No shield' : `Block ${Math.round(UPGRADES.shield.reduction[lvl]*100)}% DMG`,
+    color: '#68f'
+  },
+  health: {
+    name: 'Health+',
+    icon: '❤️',
+    maxLevel: 10,
+    costs:      [20, 40, 80, 160, 320, 520, 800, 1200, 1700, 2400],
+    bonus:      [0, 30, 65, 110, 170, 250, 350, 470, 620, 800, 1000],
+    desc: lvl => lvl === 0 ? 'Base 100 HP' : `+${UPGRADES.health.bonus[lvl]} Max HP`,
+    color: '#4c4'
+  },
+  autoSlash: {
+    name: 'Auto-Slash',
+    icon: '🔄',
+    maxLevel: 10,
+    costs:      [60, 130, 260, 500, 800, 1200, 1700, 2400, 3300, 4500],
+    interval:   [0, 30, 20, 13, 8, 6, 5, 4, 3, 2, 1],
+    desc: lvl => lvl === 0 ? 'Manual only' : `Every ${(UPGRADES.autoSlash.interval[lvl]/60).toFixed(2)}s`,
+    color: '#ea4'
+  },
+  gun: {
+    name: 'Gun',
+    icon: '🔫',
+    maxLevel: 10,
+    costs:      [40, 80, 160, 320, 600, 950, 1400, 2000, 2800, 3800],
+    range:      [0, 240, 320, 420, 540, 680, 780, 880, 980, 1080, 1200],
+    damage:     [0, 1, 2, 3, 5, 8, 11, 15, 20, 26, 33],
+    fireRate:   [0, 45, 35, 26, 18, 12, 9, 7, 5, 4, 3],
+    desc: lvl => lvl === 0 ? 'No gun' : `Range ${UPGRADES.gun.range[lvl]}  DMG ${UPGRADES.gun.damage[lvl]}  Rate ${(60/UPGRADES.gun.fireRate[lvl]).toFixed(1)}/s`,
+    color: '#f84'
+  },
+  magnet: {
+    name: 'Magnet',
+    icon: '🧲',
+    maxLevel: 10,
+    costs:      [30, 70, 140, 280, 460, 700, 1050, 1500, 2100, 2900],
+    range:      [40, 80, 130, 190, 260, 340, 430, 530, 640, 760, 900],
+    desc: lvl => `Pickup range: ${UPGRADES.magnet.range[lvl]}px`,
+    color: '#e6e'
+  },
+  boomerang: {
+    name: 'Boomerang',
+    icon: '🪃',
+    maxLevel: 10,
+    costs:      [50, 100, 200, 380, 600, 900, 1300, 1800, 2500, 3500],
+    damage:     [0, 2, 3, 4, 6, 8, 10, 13, 16, 20, 25],
+    range:      [0, 120, 150, 180, 220, 260, 300, 350, 400, 460, 520],
+    fireRate:   [0, 60, 52, 45, 38, 32, 27, 22, 18, 15, 12],
+    desc: lvl => lvl === 0 ? 'No boomerang' : `DMG ${UPGRADES.boomerang.damage[lvl]}  Range ${UPGRADES.boomerang.range[lvl]}`,
+    color: '#8cf'
+  },
+  lightning: {
+    name: 'Lightning',
+    icon: '⚡',
+    maxLevel: 10,
+    costs:      [60, 120, 240, 450, 700, 1050, 1500, 2100, 2900, 4000],
+    damage:     [0, 2, 3, 4, 5, 7, 9, 11, 14, 17, 21],
+    chainCount: [0, 1, 2, 2, 3, 3, 4, 4, 5, 6, 7],
+    chainRange: [0, 80, 90, 100, 110, 120, 135, 150, 170, 190, 220],
+    fireRate:   [0, 50, 44, 38, 33, 28, 24, 20, 17, 14, 11],
+    desc: lvl => lvl === 0 ? 'No lightning' : `DMG ${UPGRADES.lightning.damage[lvl]}  Chains ${UPGRADES.lightning.chainCount[lvl]}`,
+    color: '#ff0'
+  },
+  orbital: {
+    name: 'Orbital',
+    icon: '🔵',
+    maxLevel: 10,
+    costs:      [70, 140, 280, 500, 800, 1200, 1700, 2400, 3300, 4500],
+    orbCount:   [0, 2, 2, 3, 3, 4, 4, 5, 5, 6, 7],
+    damage:     [0, 1, 2, 3, 4, 5, 7, 9, 11, 14, 18],
+    orbRadius:  [0, 50, 55, 60, 65, 70, 78, 85, 92, 100, 110],
+    desc: lvl => lvl === 0 ? 'No orbitals' : `${UPGRADES.orbital.orbCount[lvl]} orbs  DMG ${UPGRADES.orbital.damage[lvl]}`,
+    color: '#48f'
+  },
+  flamethrower: {
+    name: 'Flamethrower',
+    icon: '🔥',
+    maxLevel: 10,
+    costs:      [55, 110, 220, 420, 650, 980, 1400, 2000, 2800, 3800],
+    damage:     [0, 1, 1, 2, 2, 3, 4, 5, 6, 8, 10],
+    range:      [0, 80, 90, 100, 115, 130, 145, 160, 180, 200, 225],
+    burnDuration:[0, 60, 70, 80, 90, 100, 115, 130, 150, 170, 200],
+    fireRate:   [0, 30, 27, 24, 21, 18, 16, 14, 12, 10, 8],
+    desc: lvl => lvl === 0 ? 'No flamethrower' : `DMG ${UPGRADES.flamethrower.damage[lvl]}/tick  Burn ${(UPGRADES.flamethrower.burnDuration[lvl]/60).toFixed(1)}s`,
+    color: '#f60'
+  },
+  freeze: {
+    name: 'Freeze Ray',
+    icon: '❄️',
+    maxLevel: 10,
+    costs:      [45, 90, 180, 350, 550, 850, 1250, 1750, 2400, 3300],
+    slowFactor: [1, 0.5, 0.45, 0.4, 0.35, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05],
+    duration:   [0, 90, 100, 115, 130, 150, 170, 195, 220, 260, 300],
+    range:      [0, 150, 170, 190, 215, 240, 270, 300, 340, 380, 430],
+    fireRate:   [0, 55, 48, 42, 36, 31, 26, 22, 18, 15, 12],
+    desc: lvl => lvl === 0 ? 'No freeze ray' : `Slow ${Math.round((1-UPGRADES.freeze.slowFactor[lvl])*100)}%  Range ${UPGRADES.freeze.range[lvl]}`,
+    color: '#4ef'
+  },
+  poison: {
+    name: 'Poison Cloud',
+    icon: '☠️',
+    maxLevel: 10,
+    costs:      [40, 80, 160, 300, 480, 720, 1050, 1500, 2100, 2900],
+    damage:     [0, 1, 1, 2, 2, 3, 4, 5, 6, 8, 10],
+    radius:     [0, 40, 48, 56, 65, 75, 86, 98, 112, 128, 150],
+    duration:   [0, 180, 210, 240, 280, 320, 370, 420, 480, 550, 660],
+    fireRate:   [0, 120, 105, 92, 80, 70, 60, 52, 44, 38, 32],
+    desc: lvl => lvl === 0 ? 'No poison' : `DMG ${UPGRADES.poison.damage[lvl]}/tick  Radius ${UPGRADES.poison.radius[lvl]}`,
+    color: '#4a2'
+  }
+};
+
+// ── Player / Game State ────────────────────────────────
+let player, zombies, particles, floatingTexts, bullets;
+let xpOrbs, acidBullets;
+let wave, zombiesLeft, spawnTimer, score;
+let xp, xpToNext, level, money;
+let upgradeLevels;
+let swinging, swingTimer, autoSwingCooldown, gunCooldown;
+let bossActive;
+let shopSelection;
+let dashCooldown, dashTimer, dashVx, dashVy;
+let boomerangs, lightningEffects, poisonClouds;
+let boomerangCooldown, lightningCooldown, orbitalAngle, flameCooldown, freezeCooldown, poisonCooldown;
+let freezeBeamTimer, freezeBeamAngle;
+let shopScroll;
+const DASH_COOLDOWN_MAX = 120, DASH_DURATION = 10, DASH_SPEED = 12;
+let shockwaveCooldown, shockwaveEffect;
+const SHOCKWAVE_COOLDOWN_MAX = 480, SHOCKWAVE_RADIUS = 150;
+let stats;
+let mouse = { x: CW / 2, y: CH / 2 };
+const keys = {};
+const SWING_DURATION = 15;
+const SWORD_ARC = Math.PI * 0.8;
+
+function xpForLevel(lvl) { return Math.floor(50 * Math.pow(lvl, 1.4)); }
+function moneyForLevel(lvl) { return 8 + lvl * 4; }
+
+function init() {
+  upgradeLevels = { sword: 0, shield: 0, health: 0, autoSlash: 0, gun: 0, magnet: 0, boomerang: 0, lightning: 0, orbital: 0, flamethrower: 0, freeze: 0, poison: 0 };
+  xp = 0;
+  level = 1;
+  xpToNext = xpForLevel(level);
+  money = 0;
+  resetRun();
+}
+
+function resetRun() {
+  let maxHp = 100 + UPGRADES.health.bonus[upgradeLevels.health];
+  player = {
+    x: CW / 2, y: CH / 2,
+    radius: 20, speed: 3.2, baseSpeed: 3.2,
+    hp: maxHp, maxHp: maxHp,
+    angle: 0, iFrames: 0, damageFlash: 0
+  };
+  zombies = [];
+  particles = [];
+  floatingTexts = [];
+  bullets = [];
+  xpOrbs = [];
+  acidBullets = [];
+  wave = 0;
+  zombiesLeft = 0;
+  spawnTimer = 0;
+  score = 0;
+  // Keep level, xp, money, and upgrades across deaths
+  swinging = false;
+  swingTimer = 0;
+  autoSwingCooldown = 0;
+  gunCooldown = 0;
+  bossActive = false;
+  shopSelection = 0;
+  dashCooldown = 0;
+  dashTimer = 0;
+  dashVx = 0;
+  dashVy = 0;
+  shockwaveCooldown = 0;
+  shockwaveEffect = 0;
+  boomerangs = [];
+  lightningEffects = [];
+  poisonClouds = [];
+  boomerangCooldown = 0;
+  lightningCooldown = 0;
+  orbitalAngle = 0;
+  flameCooldown = 0;
+  freezeCooldown = 0;
+  poisonCooldown = 0;
+  freezeBeamTimer = 0;
+  freezeBeamAngle = 0;
+  shopScroll = 0;
+  stats = { kills: 0, damageDealt: 0, damageTaken: 0, dashesUsed: 0, shockwavesUsed: 0, xpCollected: 0, moneyEarned: 0, timeSurvived: 0, highestWave: 0, bossesKilled: 0 };
+  screen = 'playing';
+  nextWave();
+}
+
+// ── Input ──────────────────────────────────────────────
+window.addEventListener('keydown', e => {
+  keys[e.key.toLowerCase()] = true;
+  if (screen === 'playing' && e.key === ' ') {
+    e.preventDefault();
+    if (!swinging) {
+      swinging = true;
+      swingTimer = SWING_DURATION;
+    }
+  } else if (screen === 'playing' && e.key === 'Shift') {
+    // Dash
+    if (dashCooldown <= 0 && dashTimer <= 0) {
+      let ddx = 0, ddy = 0;
+      if (keys['w'] || keys['arrowup']) ddy -= 1;
+      if (keys['s'] || keys['arrowdown']) ddy += 1;
+      if (keys['a'] || keys['arrowleft']) ddx -= 1;
+      if (keys['d'] || keys['arrowright']) ddx += 1;
+      if (ddx === 0 && ddy === 0) {
+        ddx = Math.cos(player.angle);
+        ddy = Math.sin(player.angle);
+      }
+      let dlen = Math.sqrt(ddx * ddx + ddy * ddy);
+      dashVx = (ddx / dlen) * DASH_SPEED;
+      dashVy = (ddy / dlen) * DASH_SPEED;
+      dashTimer = DASH_DURATION;
+      dashCooldown = DASH_COOLDOWN_MAX;
+      player.iFrames = Math.max(player.iFrames, DASH_DURATION + 5);
+      stats.dashesUsed++;
+    }
+  } else if (screen === 'playing' && e.key.toLowerCase() === 'q') {
+    // Shockwave
+    if (shockwaveCooldown <= 0) {
+      let swDmg = 5 + wave;
+      shockwaveCooldown = SHOCKWAVE_COOLDOWN_MAX;
+      shockwaveEffect = 20;
+      stats.shockwavesUsed++;
+      for (let z of zombies) {
+        let d = Math.hypot(z.x - player.x, z.y - player.y);
+        if (d < SHOCKWAVE_RADIUS) {
+          z.hp -= swDmg;
+          z.hitFlash = 8;
+          stats.damageDealt += swDmg;
+          let a = Math.atan2(z.y - player.y, z.x - player.x);
+          let kb = z.isBoss ? 15 : 30;
+          z.x += Math.cos(a) * kb;
+          z.y += Math.sin(a) * kb;
+        }
+      }
+      spawnParticles(player.x, player.y, '#4af', 20);
+    }
+  } else if (screen === 'playing' && e.key.toLowerCase() === 'b') {
+    screen = 'shop';
+    shopSelection = 0;
+    shopScroll = 0;
+  } else if (screen === 'playing' && e.key === '9') {
+    // Cheat: clear all zombies, skip to next wave
+    zombies.length = 0;
+    zombiesLeft = 0;
+  } else if (e.key === '$') {
+    // Cheat: gain 999 money
+    money += 999;
+  } else if (screen === 'shop') {
+    let itemKeys = Object.keys(UPGRADES);
+    if (e.key.toLowerCase() === 'b' || e.key === 'Escape') {
+      if (player.hp <= 0) { resetRun(); } else { screen = 'playing'; }
+    } else if (e.key === 'ArrowUp' || e.key.toLowerCase() === 'w') {
+      shopSelection = (shopSelection - 1 + itemKeys.length) % itemKeys.length;
+      ensureShopSelectionVisible();
+    } else if (e.key === 'ArrowDown' || e.key.toLowerCase() === 's') {
+      shopSelection = (shopSelection + 1) % itemKeys.length;
+      ensureShopSelectionVisible();
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      buyUpgrade(itemKeys[shopSelection]);
+    }
+  }
+});
+window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+
+canvas.addEventListener('mousemove', e => {
+  const r = canvas.getBoundingClientRect();
+  mouse.x = (e.clientX - r.left) * (CW / r.width);
+  mouse.y = (e.clientY - r.top) * (CH / r.height);
+
+  if (screen === 'shop') {
+    let itemKeys = Object.keys(UPGRADES);
+    let startY = 140;
+    let itemSpacing = 50;
+    for (let i = 0; i < itemKeys.length; i++) {
+      let iy = startY + i * itemSpacing - shopScroll;
+      if (iy < 130 || iy > 560) continue;
+      if (mouse.x > CW/2 - 230 && mouse.x < CW/2 + 230 && mouse.y > iy - 5 && mouse.y < iy + itemSpacing - 2) {
+        shopSelection = i;
+      }
+    }
+  }
+});
+
+canvas.addEventListener('mousedown', e => {
+  if (screen === 'title') {
+    resetRun();
+    return;
+  }
+  if (screen === 'dead') {
+    screen = 'shop';
+    shopSelection = 0;
+    shopScroll = 0;
+    return;
+  }
+  if (screen === 'shop') {
+    let itemKeys = Object.keys(UPGRADES);
+    let startY = 140;
+    let itemSpacing = 50;
+    for (let i = 0; i < itemKeys.length; i++) {
+      let iy = startY + i * itemSpacing - shopScroll;
+      if (iy < 130 || iy > 560) continue;
+      if (mouse.x > CW/2 - 230 && mouse.x < CW/2 + 230 && mouse.y > iy - 5 && mouse.y < iy + itemSpacing - 2) {
+        shopSelection = i;
+        buyUpgrade(itemKeys[i]);
+        return;
+      }
+    }
+    // Check Play button
+    let totalH = itemKeys.length * itemSpacing;
+    let playBtnY = startY + totalH + 10 - shopScroll;
+    if (playBtnY > 130 && playBtnY < 580 && mouse.y > playBtnY - 5 && mouse.y < playBtnY + 40) {
+      if (player.hp <= 0) { resetRun(); } else { screen = 'playing'; }
+    }
+    return;
+  }
+});
+
+canvas.addEventListener('wheel', e => {
+  if (screen === 'shop') {
+    e.preventDefault();
+    let itemKeys = Object.keys(UPGRADES);
+    let maxScroll = Math.max(0, itemKeys.length * 50 + 60 - 420);
+    shopScroll = Math.max(0, Math.min(maxScroll, shopScroll + e.deltaY * 0.5));
+  }
+}, { passive: false });
+
+function ensureShopSelectionVisible() {
+  let itemSpacing = 50;
+  let startY = 140;
+  let iy = startY + shopSelection * itemSpacing - shopScroll;
+  if (iy < 140) shopScroll -= (140 - iy);
+  if (iy + itemSpacing > 560) shopScroll += (iy + itemSpacing - 560);
+  let itemKeys = Object.keys(UPGRADES);
+  let maxScroll = Math.max(0, itemKeys.length * itemSpacing + 60 - 420);
+  shopScroll = Math.max(0, Math.min(maxScroll, shopScroll));
+}
+
+// ── Shop ───────────────────────────────────────────────
+function buyUpgrade(key) {
+  let up = UPGRADES[key];
+  let lvl = upgradeLevels[key];
+  if (lvl >= up.maxLevel) return;
+  let cost = up.costs[lvl];
+  if (money >= cost) {
+    money -= cost;
+    upgradeLevels[key]++;
+    // Apply health upgrade immediately
+    if (key === 'health') {
+      let newMax = 100 + UPGRADES.health.bonus[upgradeLevels.health];
+      let diff = newMax - player.maxHp;
+      player.maxHp = newMax;
+      player.hp = Math.min(player.hp + diff, player.maxHp);
+    }
+  }
+}
+
+// ── Floating Text ──────────────────────────────────────
+function addFloatingText(x, y, text, color) {
+  floatingTexts.push({ x, y, text, color, life: 50, maxLife: 50 });
+}
+
+// ── Waves ──────────────────────────────────────────────
+function nextWave() {
+  wave++;
+  zombiesLeft = 3 + wave * 2;
+  bossActive = false;
+  // Boss wave every 10
+  if (wave % 10 === 0) {
+    bossActive = true;
+    zombiesLeft += 1; // boss counted as one of the spawns
+  }
+  spawnTimer = 0;
+}
+let bossSpawned = false;
+
+function pickZombieType() {
+  let types = ['walker'];
+  if (wave >= 3) types.push('runner');
+  if (wave >= 5) types.push('tank');
+  if (wave >= 7) types.push('spitter');
+  if (wave >= 8) types.push('splitter');
+  if (wave >= 10) types.push('exploder');
+  if (wave >= 12) types.push('ghost');
+  if (wave >= 15) types.push('necromancer');
+  // Weighted: walker always most common
+  let weights = types.map(t => {
+    if (t === 'walker') return 10;
+    if (t === 'runner') return 6;
+    if (t === 'tank') return 4;
+    if (t === 'spitter') return 3;
+    if (t === 'splitter') return 3;
+    if (t === 'exploder') return 2;
+    if (t === 'ghost') return 2;
+    if (t === 'necromancer') return 1;
+    return 1;
+  });
+  let total = weights.reduce((a, b) => a + b, 0);
+  let r = Math.random() * total;
+  for (let i = 0; i < types.length; i++) {
+    r -= weights[i];
+    if (r <= 0) return types[i];
+  }
+  return 'walker';
+}
+
+function spawnZombie() {
+  let angle = Math.random() * Math.PI * 2;
+  let dist = Math.max(CW, CH) / 2 + 60;
+  let x = CW / 2 + Math.cos(angle) * dist;
+  let y = CH / 2 + Math.sin(angle) * dist;
+  let baseSpeed = 0.8 + Math.random() * 0.5 + wave * 0.05;
+  let baseHp = 2 + Math.floor(wave / 3);
+  let baseDamage = 8 + Math.floor(wave / 2);
+  let radius = 16 + Math.random() * 6;
+
+  let type = pickZombieType();
+
+  let z = {
+    x, y, radius, speed: baseSpeed, hp: baseHp, maxHp: baseHp,
+    damage: baseDamage, hitFlash: 0, attackCooldown: 0,
+    isBoss: false, bossCharging: false, chargeTimer: 0, chargeCooldown: 0,
+    chargeVx: 0, chargeVy: 0,
+    zombieType: type, ghostPhase: 0, ghostSolid: true, necroTimer: 0,
+    exploded: false, spitCooldown: 60 + Math.floor(Math.random() * 60),
+    burnTimer: 0, burnDmg: 0, slowTimer: 0, slowFactor: 1
+  };
+
+  // Type-specific stat adjustments
+  if (type === 'runner') {
+    z.speed *= 1.5;
+    z.hp = Math.max(1, Math.floor(z.hp * 0.6));
+    z.maxHp = z.hp;
+    z.damage = Math.max(1, Math.floor(z.damage * 0.8));
+  } else if (type === 'tank') {
+    z.speed *= 0.6;
+    z.hp = Math.floor(z.hp * 2.5);
+    z.maxHp = z.hp;
+    z.damage = Math.floor(z.damage * 1.5);
+    z.radius = 22 + Math.random() * 4;
+  } else if (type === 'spitter') {
+    z.hp = Math.max(1, Math.floor(z.hp * 0.7));
+    z.maxHp = z.hp;
+    z.speed *= 0.8;
+  } else if (type === 'splitter') {
+    z.radius = 18 + Math.random() * 4;
+  } else if (type === 'exploder') {
+    z.speed *= 1.3;
+    z.hp = Math.max(1, Math.floor(z.hp * 0.8));
+    z.maxHp = z.hp;
+  } else if (type === 'ghost') {
+    z.speed *= 1.1;
+    z.ghostPhase = Math.random() * 120;
+  } else if (type === 'necromancer') {
+    z.hp = Math.floor(z.hp * 2);
+    z.maxHp = z.hp;
+    z.radius = 22;
+    z.speed *= 0.7;
+    z.necroTimer = 180 + Math.floor(Math.random() * 120);
+  }
+
+  zombies.push(z);
+}
+
+function spawnMiniZombie(parentX, parentY, parentWave) {
+  let offset = (Math.random() - 0.5) * 30;
+  let baseHp = Math.max(1, Math.floor((2 + Math.floor(parentWave / 3)) * 0.5));
+  zombies.push({
+    x: parentX + offset, y: parentY + offset,
+    radius: 10, speed: 1.0 + Math.random() * 0.3 + parentWave * 0.05,
+    hp: baseHp, maxHp: baseHp,
+    damage: Math.max(1, Math.floor((8 + Math.floor(parentWave / 2)) * 0.5)),
+    hitFlash: 0, attackCooldown: 0,
+    isBoss: false, bossCharging: false, chargeTimer: 0, chargeCooldown: 0,
+    chargeVx: 0, chargeVy: 0,
+    zombieType: 'mini', ghostPhase: 0, ghostSolid: true, necroTimer: 0,
+    exploded: false, spitCooldown: 999,
+    burnTimer: 0, burnDmg: 0, slowTimer: 0, slowFactor: 1
+  });
+}
+
+// Boss type definitions
+const BOSS_TYPES = [
+  { id: 'brute',      name: 'THE BRUTE',      color: '#6a2e8a', auraColor: '#a3f',  eyeColor: '#f0f' },
+  { id: 'inferno',    name: 'INFERNO',         color: '#a02000', auraColor: '#f60',  eyeColor: '#ff0' },
+  { id: 'frost_titan', name: 'FROST TITAN',    color: '#1a5080', auraColor: '#4cf',  eyeColor: '#aef' },
+  { id: 'necro_lord', name: 'NECRO LORD',      color: '#3a0050', auraColor: '#a0f',  eyeColor: '#f0f' },
+  { id: 'hydra',      name: 'THE HYDRA',       color: '#206830', auraColor: '#4f4',  eyeColor: '#8f8' },
+];
+
+function getBossType(w) {
+  let idx = Math.floor(w / 10) - 1;
+  return BOSS_TYPES[idx % BOSS_TYPES.length];
+}
+
+function spawnBoss() {
+  let angle = Math.random() * Math.PI * 2;
+  let dist = Math.max(CW, CH) / 2 + 80;
+  let x = CW / 2 + Math.cos(angle) * dist;
+  let y = CH / 2 + Math.sin(angle) * dist;
+  let bossInfo = getBossType(wave);
+  let cycle = Math.floor((Math.floor(wave / 10) - 1) / BOSS_TYPES.length);
+  let hpMult = 1 + cycle * 0.5;
+  let dmgMult = 1 + cycle * 0.3;
+  let baseHp, baseDmg, radius, speed;
+  switch (bossInfo.id) {
+    case 'brute':
+      baseHp = 15 + wave * 3; baseDmg = 20 + wave * 2; radius = 38; speed = 1.0 + wave * 0.03; break;
+    case 'inferno':
+      baseHp = 12 + wave * 2.5; baseDmg = 15 + wave * 2; radius = 34; speed = 1.4 + wave * 0.04; break;
+    case 'frost_titan':
+      baseHp = 25 + wave * 4; baseDmg = 18 + wave * 1.5; radius = 44; speed = 0.6 + wave * 0.02; break;
+    case 'necro_lord':
+      baseHp = 14 + wave * 2.5; baseDmg = 12 + wave * 1.5; radius = 36; speed = 0.8 + wave * 0.025; break;
+    case 'hydra':
+      baseHp = 20 + wave * 3.5; baseDmg = 16 + wave * 1.8; radius = 40; speed = 0.9 + wave * 0.03; break;
+    default:
+      baseHp = 15 + wave * 3; baseDmg = 20 + wave * 2; radius = 38; speed = 1.0 + wave * 0.03;
+  }
+  let hp = Math.floor(baseHp * hpMult);
+  let damage = Math.floor(baseDmg * dmgMult);
+  zombies.push({
+    x, y, radius, speed, hp, maxHp: hp,
+    damage, hitFlash: 0, attackCooldown: 0,
+    isBoss: true, bossCharging: false, chargeTimer: 0,
+    chargeCooldown: 120 + Math.floor(Math.random() * 60),
+    chargeVx: 0, chargeVy: 0,
+    zombieType: 'boss', bossId: bossInfo.id, ghostPhase: 0, ghostSolid: true,
+    necroTimer: bossInfo.id === 'necro_lord' ? 150 : 0,
+    exploded: false, spitCooldown: bossInfo.id === 'inferno' ? 80 : 999,
+    fireTrailTimer: 0, frozenAuraTimer: 0, hydraPhase: 0,
+    burnTimer: 0, burnDmg: 0, slowTimer: 0, slowFactor: 1
+  });
+}
+
+// ── Particles ──────────────────────────────────────────
+function spawnParticles(x, y, color, count) {
+  for (let i = 0; i < count; i++) {
+    let a = Math.random() * Math.PI * 2;
+    let spd = 1 + Math.random() * 3;
+    particles.push({
+      x, y, vx: Math.cos(a) * spd, vy: Math.sin(a) * spd,
+      life: 20 + Math.random() * 15, maxLife: 35,
+      radius: 2 + Math.random() * 3, color
+    });
+  }
+}
+
+// ── Update ─────────────────────────────────────────────
+function update() {
+  titlePulse += 0.03;
+  if (screen !== 'playing') return;
+
+  stats.timeSurvived++;
+  if (wave > stats.highestWave) stats.highestWave = wave;
+
+  // Dash logic
+  if (dashTimer > 0) {
+    player.x += dashVx;
+    player.y += dashVy;
+    dashTimer--;
+    // Dash trail particles
+    spawnParticles(player.x, player.y, '#4af', 1);
+  }
+  if (dashCooldown > 0) dashCooldown--;
+  if (shockwaveCooldown > 0) shockwaveCooldown--;
+  if (shockwaveEffect > 0) shockwaveEffect--;
+
+  // Player movement (skip during dash)
+  player.speed = player.baseSpeed; // reset speed each frame before boss effects
+  let dx = 0, dy = 0;
+  if (dashTimer <= 0) {
+    if (keys['w'] || keys['arrowup']) dy -= 1;
+    if (keys['s'] || keys['arrowdown']) dy += 1;
+    if (keys['a'] || keys['arrowleft']) dx -= 1;
+    if (keys['d'] || keys['arrowright']) dx += 1;
+    if (dx || dy) {
+      let len = Math.sqrt(dx * dx + dy * dy);
+      player.x += (dx / len) * player.speed;
+      player.y += (dy / len) * player.speed;
+    }
+  }
+  player.x = Math.max(player.radius, Math.min(CW - player.radius, player.x));
+  player.y = Math.max(player.radius, Math.min(CH - player.radius, player.y));
+  player.angle = Math.atan2(mouse.y - player.y, mouse.x - player.x);
+  if (player.iFrames > 0) player.iFrames--;
+  if (player.damageFlash > 0) player.damageFlash--;
+
+  // Auto-slash — aim toward closest zombie
+  let autoLvl = upgradeLevels.autoSlash;
+  if (autoLvl > 0) {
+    autoSwingCooldown--;
+    if (autoSwingCooldown <= 0 && !swinging) {
+      let closestZ = null, closestD = Infinity;
+      for (let z of zombies) {
+        let d = Math.hypot(z.x - player.x, z.y - player.y);
+        if (d < closestD) { closestD = d; closestZ = z; }
+      }
+      if (closestZ) {
+        player.angle = Math.atan2(closestZ.y - player.y, closestZ.x - player.x);
+      }
+      swinging = true;
+      swingTimer = SWING_DURATION;
+      autoSwingCooldown = UPGRADES.autoSlash.interval[autoLvl];
+    }
+  }
+
+  // Sword stats from upgrade
+  let swordLvl = upgradeLevels.sword;
+  let swordLen = UPGRADES.sword.length[swordLvl];
+  let swordDmg = UPGRADES.sword.damage[swordLvl];
+  let swordKB  = UPGRADES.sword.knockback[swordLvl];
+
+  // Sword swing
+  if (swinging) {
+    swingTimer--;
+    let progress = 1 - swingTimer / SWING_DURATION;
+    let curAngle = player.angle - SWORD_ARC / 2 + SWORD_ARC * progress;
+
+    for (let z of zombies) {
+      // Ghost check: can't hit during transparent phase
+      if (z.zombieType === 'ghost' && !z.ghostSolid) continue;
+      let toZ = Math.atan2(z.y - player.y, z.x - player.x);
+      let dist = Math.hypot(z.x - player.x, z.y - player.y);
+      let aDiff = Math.abs(angleDelta(curAngle, toZ));
+      if (dist < swordLen + z.radius + player.radius && aDiff < 0.35) {
+        if (z.hitFlash <= 0) {
+          z.hp -= swordDmg;
+          z.hitFlash = 8;
+          stats.damageDealt += swordDmg;
+          let a = Math.atan2(z.y - player.y, z.x - player.x);
+          let kb = z.isBoss ? swordKB * 0.4 : swordKB;
+          z.x += Math.cos(a) * kb;
+          z.y += Math.sin(a) * kb;
+          spawnParticles(z.x, z.y, z.isBoss ? '#f4f' : '#4f4', 5);
+        }
+      }
+    }
+    if (swingTimer <= 0) swinging = false;
+  }
+
+  // Spawn zombies
+  if (zombiesLeft > 0) {
+    spawnTimer--;
+    if (spawnTimer <= 0) {
+      if (bossActive && zombiesLeft === 1) {
+        spawnBoss();
+      } else {
+        spawnZombie();
+      }
+      zombiesLeft--;
+      spawnTimer = Math.max(10, 40 - wave * 2);
+    }
+  }
+
+  // Shield reduction
+  let shieldLvl = upgradeLevels.shield;
+  let dmgReduction = UPGRADES.shield.reduction[shieldLvl];
+
+  // Update zombies
+  for (let i = zombies.length - 1; i >= 0; i--) {
+    let z = zombies[i];
+    if (z.hitFlash > 0) z.hitFlash--;
+    if (z.attackCooldown > 0) z.attackCooldown--;
+
+    // Burn DOT
+    if (z.burnTimer > 0) {
+      z.burnTimer--;
+      if (z.burnTimer % 15 === 0) {
+        z.hp -= z.burnDmg;
+        z.hitFlash = 4;
+        stats.damageDealt += z.burnDmg;
+        spawnParticles(z.x, z.y, '#f60', 2);
+      }
+    }
+    // Slow decay
+    if (z.slowTimer > 0) z.slowTimer--;
+
+    // Effective speed (apply slow)
+    let effSpeed = z.speed * (z.slowTimer > 0 ? z.slowFactor : 1);
+
+    // Ghost phase toggling
+    if (z.zombieType === 'ghost') {
+      z.ghostPhase++;
+      z.ghostSolid = (z.ghostPhase % 120) < 60;
+    }
+
+    // Boss abilities
+    if (z.isBoss) {
+      let bInfo = getBossType(wave);
+      let bid = z.bossId || 'brute';
+
+      if (bid === 'brute') {
+        // Brute: charge attack
+        if (z.bossCharging) {
+          z.x += z.chargeVx; z.y += z.chargeVy;
+          z.chargeTimer--;
+          spawnParticles(z.x, z.y, '#a3f', 1);
+          if (z.chargeTimer <= 0) { z.bossCharging = false; z.chargeCooldown = 120 + Math.floor(Math.random() * 60); }
+        } else {
+          z.chargeCooldown--;
+          if (z.chargeCooldown <= 0) {
+            let a = Math.atan2(player.y - z.y, player.x - z.x);
+            z.chargeVx = Math.cos(a) * 6; z.chargeVy = Math.sin(a) * 6;
+            z.chargeTimer = 30; z.bossCharging = true;
+          } else {
+            let a = Math.atan2(player.y - z.y, player.x - z.x);
+            z.x += Math.cos(a) * effSpeed; z.y += Math.sin(a) * effSpeed;
+          }
+        }
+      } else if (bid === 'inferno') {
+        // Inferno: fast, leaves fire trail, shoots fireballs
+        let a = Math.atan2(player.y - z.y, player.x - z.x);
+        z.x += Math.cos(a) * effSpeed; z.y += Math.sin(a) * effSpeed;
+        z.fireTrailTimer = (z.fireTrailTimer || 0) + 1;
+        if (z.fireTrailTimer % 8 === 0) {
+          poisonClouds.push({ x: z.x, y: z.y, radius: 25, damage: 2 + Math.floor(wave / 5), life: 120, color: '#f60', type: 'fire' });
+        }
+        z.spitCooldown--;
+        if (z.spitCooldown <= 0) {
+          for (let s = 0; s < 3; s++) {
+            let sa = a + (s - 1) * 0.3;
+            acidBullets.push({ x: z.x, y: z.y, vx: Math.cos(sa) * 3.5, vy: Math.sin(sa) * 3.5, radius: 6, damage: 8 + Math.floor(wave / 2), life: 120, color: '#f80' });
+          }
+          z.spitCooldown = 70 + Math.floor(Math.random() * 30);
+        }
+      } else if (bid === 'frost_titan') {
+        // Frost Titan: slow but tanky, aura slows player
+        let a = Math.atan2(player.y - z.y, player.x - z.x);
+        z.x += Math.cos(a) * effSpeed; z.y += Math.sin(a) * effSpeed;
+        let distToP = Math.hypot(z.x - player.x, z.y - player.y);
+        if (distToP < 160) {
+          player.speed = player.baseSpeed * 0.55;
+          z.frozenAuraTimer = 10;
+          if (Math.random() < 0.03) spawnParticles(player.x + (Math.random()-0.5)*40, player.y + (Math.random()-0.5)*40, '#aef', 2);
+        }
+        // Ice shockwave every few seconds
+        z.chargeCooldown--;
+        if (z.chargeCooldown <= 0) {
+          for (let s = 0; s < 8; s++) {
+            let sa = (Math.PI * 2 / 8) * s;
+            acidBullets.push({ x: z.x, y: z.y, vx: Math.cos(sa) * 2.5, vy: Math.sin(sa) * 2.5, radius: 8, damage: 6 + Math.floor(wave / 3), life: 80, color: '#4cf' });
+          }
+          spawnParticles(z.x, z.y, '#4cf', 12);
+          z.chargeCooldown = 180 + Math.floor(Math.random() * 60);
+        }
+      } else if (bid === 'necro_lord') {
+        // Necro Lord: summons minions, stays at range
+        let distToP = Math.hypot(z.x - player.x, z.y - player.y);
+        let a = Math.atan2(player.y - z.y, player.x - z.x);
+        if (distToP > 200) {
+          z.x += Math.cos(a) * effSpeed; z.y += Math.sin(a) * effSpeed;
+        } else if (distToP < 150) {
+          z.x -= Math.cos(a) * effSpeed * 0.5; z.y -= Math.sin(a) * effSpeed * 0.5;
+        }
+        z.necroTimer--;
+        if (z.necroTimer <= 0 && zombies.length < 40) {
+          for (let m = 0; m < 2; m++) {
+            let ma = Math.random() * Math.PI * 2;
+            let mx = z.x + Math.cos(ma) * 40, my = z.y + Math.sin(ma) * 40;
+            let mhp = 3 + Math.floor(wave / 3);
+            zombies.push({
+              x: mx, y: my, radius: 14, speed: 1.2 + Math.random() * 0.5 + wave * 0.04,
+              hp: mhp, maxHp: mhp, damage: 6 + Math.floor(wave / 3),
+              hitFlash: 0, attackCooldown: 0,
+              isBoss: false, bossCharging: false, chargeTimer: 0, chargeCooldown: 0,
+              chargeVx: 0, chargeVy: 0,
+              zombieType: 'runner', ghostPhase: 0, ghostSolid: true, necroTimer: 0,
+              exploded: false, spitCooldown: 999,
+              burnTimer: 0, burnDmg: 0, slowTimer: 0, slowFactor: 1
+            });
+            spawnParticles(mx, my, '#a0f', 5);
+          }
+          z.necroTimer = 140 + Math.floor(Math.random() * 80);
+        }
+      } else if (bid === 'hydra') {
+        // Hydra: charges, splits into 2 mini-bosses at 50% HP
+        if (z.bossCharging) {
+          z.x += z.chargeVx; z.y += z.chargeVy;
+          z.chargeTimer--;
+          spawnParticles(z.x, z.y, '#4f4', 1);
+          if (z.chargeTimer <= 0) { z.bossCharging = false; z.chargeCooldown = 100 + Math.floor(Math.random() * 40); }
+        } else {
+          z.chargeCooldown--;
+          if (z.chargeCooldown <= 0) {
+            let a = Math.atan2(player.y - z.y, player.x - z.x);
+            z.chargeVx = Math.cos(a) * 5; z.chargeVy = Math.sin(a) * 5;
+            z.chargeTimer = 25; z.bossCharging = true;
+          } else {
+            let a = Math.atan2(player.y - z.y, player.x - z.x);
+            z.x += Math.cos(a) * effSpeed; z.y += Math.sin(a) * effSpeed;
+          }
+        }
+        if (z.hydraPhase === 0 && z.hp <= z.maxHp * 0.5) {
+          z.hydraPhase = 1;
+          for (let h = 0; h < 2; h++) {
+            let mhp = Math.floor(z.maxHp * 0.35);
+            let off = h === 0 ? -30 : 30;
+            zombies.push({
+              x: z.x + off, y: z.y + off, radius: 28, speed: z.speed * 1.2,
+              hp: mhp, maxHp: mhp, damage: Math.floor(z.damage * 0.7),
+              hitFlash: 0, attackCooldown: 0,
+              isBoss: true, bossCharging: false, chargeTimer: 0,
+              chargeCooldown: 80 + Math.floor(Math.random() * 40),
+              chargeVx: 0, chargeVy: 0,
+              zombieType: 'boss', bossId: 'hydra_mini', ghostPhase: 0, ghostSolid: true,
+              necroTimer: 0, exploded: false, spitCooldown: 999,
+              fireTrailTimer: 0, frozenAuraTimer: 0, hydraPhase: 1,
+              burnTimer: 0, burnDmg: 0, slowTimer: 0, slowFactor: 1
+            });
+          }
+          spawnParticles(z.x, z.y, '#4f4', 20);
+          addFloatingText(z.x, z.y - 30, 'SPLIT!', '#4f4');
+        }
+      } else {
+        // hydra_mini or fallback: simple chase + charge
+        if (z.bossCharging) {
+          z.x += z.chargeVx; z.y += z.chargeVy;
+          z.chargeTimer--;
+          spawnParticles(z.x, z.y, '#4f4', 1);
+          if (z.chargeTimer <= 0) { z.bossCharging = false; z.chargeCooldown = 80 + Math.floor(Math.random() * 40); }
+        } else {
+          z.chargeCooldown--;
+          if (z.chargeCooldown <= 0) {
+            let a = Math.atan2(player.y - z.y, player.x - z.x);
+            z.chargeVx = Math.cos(a) * 5; z.chargeVy = Math.sin(a) * 5;
+            z.chargeTimer = 20; z.bossCharging = true;
+          } else {
+            let a = Math.atan2(player.y - z.y, player.x - z.x);
+            z.x += Math.cos(a) * effSpeed; z.y += Math.sin(a) * effSpeed;
+          }
+        }
+      }
+    } else if (z.zombieType === 'spitter') {
+      // Stay at range ~200px, shoot acid
+      let distToPlayer = Math.hypot(z.x - player.x, z.y - player.y);
+      let a = Math.atan2(player.y - z.y, player.x - z.x);
+      if (distToPlayer > 220) {
+        z.x += Math.cos(a) * effSpeed;
+        z.y += Math.sin(a) * effSpeed;
+      } else if (distToPlayer < 160) {
+        z.x -= Math.cos(a) * effSpeed * 0.5;
+        z.y -= Math.sin(a) * effSpeed * 0.5;
+      }
+      z.spitCooldown--;
+      if (z.spitCooldown <= 0) {
+        let ba = Math.atan2(player.y - z.y, player.x - z.x);
+        acidBullets.push({
+          x: z.x, y: z.y,
+          vx: Math.cos(ba) * 3.5, vy: Math.sin(ba) * 3.5,
+          damage: Math.max(3, Math.floor(z.damage * 0.5)),
+          life: 90
+        });
+        z.spitCooldown = 80 + Math.floor(Math.random() * 40);
+      }
+    } else if (z.zombieType === 'necromancer') {
+      // Stay at range, spawn walkers
+      let distToPlayer = Math.hypot(z.x - player.x, z.y - player.y);
+      let a = Math.atan2(player.y - z.y, player.x - z.x);
+      if (distToPlayer > 280) {
+        z.x += Math.cos(a) * effSpeed;
+        z.y += Math.sin(a) * effSpeed;
+      } else if (distToPlayer < 200) {
+        z.x -= Math.cos(a) * effSpeed * 0.5;
+        z.y -= Math.sin(a) * effSpeed * 0.5;
+      }
+      z.necroTimer--;
+      if (z.necroTimer <= 0) {
+        // Spawn a walker near the necromancer
+        let sa = Math.random() * Math.PI * 2;
+        let sx = z.x + Math.cos(sa) * 30;
+        let sy = z.y + Math.sin(sa) * 30;
+        let nhp = 2 + Math.floor(wave / 3);
+        zombies.push({
+          x: sx, y: sy, radius: 16, speed: 0.8 + Math.random() * 0.5 + wave * 0.05,
+          hp: nhp, maxHp: nhp, damage: 8 + Math.floor(wave / 2),
+          hitFlash: 0, attackCooldown: 0,
+          isBoss: false, bossCharging: false, chargeTimer: 0, chargeCooldown: 0,
+          chargeVx: 0, chargeVy: 0,
+          zombieType: 'walker', ghostPhase: 0, ghostSolid: true, necroTimer: 0,
+          exploded: false, spitCooldown: 999,
+          burnTimer: 0, burnDmg: 0, slowTimer: 0, slowFactor: 1
+        });
+        spawnParticles(sx, sy, '#808', 6);
+        z.necroTimer = 200 + Math.floor(Math.random() * 100);
+      }
+    } else if (z.zombieType === 'exploder') {
+      // Rush at player, explode on contact
+      let a = Math.atan2(player.y - z.y, player.x - z.x);
+      z.x += Math.cos(a) * effSpeed;
+      z.y += Math.sin(a) * effSpeed;
+    } else {
+      // Default movement (walker, runner, tank, splitter, mini, ghost)
+      let a = Math.atan2(player.y - z.y, player.x - z.x);
+      z.x += Math.cos(a) * effSpeed;
+      z.y += Math.sin(a) * effSpeed;
+    }
+
+    // Collision with player
+    let dist = Math.hypot(z.x - player.x, z.y - player.y);
+    if (dist < z.radius + player.radius) {
+      // Exploder detonation
+      if (z.zombieType === 'exploder' && !z.exploded) {
+        z.exploded = true;
+        z.hp = 0;
+        let explodeDmg = Math.floor(z.damage * 1.5);
+        if (player.iFrames <= 0) {
+          let finalDmg = Math.max(1, Math.floor(explodeDmg * (1 - dmgReduction)));
+          player.hp -= finalDmg;
+          player.damageFlash = 10;
+          player.iFrames = 30;
+          stats.damageTaken += finalDmg;
+          addFloatingText(player.x, player.y - 30, `-${finalDmg} 💥`, '#f84');
+        }
+        spawnParticles(z.x, z.y, '#f80', 20);
+        spawnParticles(z.x, z.y, '#f44', 15);
+        // AoE: also damage nearby zombies
+        for (let oz of zombies) {
+          if (oz === z) continue;
+          if (Math.hypot(oz.x - z.x, oz.y - z.y) < 60) {
+            oz.hp -= Math.floor(explodeDmg * 0.5);
+            oz.hitFlash = 8;
+          }
+        }
+        if (player.hp <= 0) {
+          player.hp = 0;
+          let waveSurvived = wave - 1;
+          if (waveSurvived > highScore) {
+            highScore = waveSurvived;
+            localStorage.setItem('blobSurvivorHighScore', highScore.toString());
+          }
+          screen = 'dead';
+          spawnParticles(player.x, player.y, '#f44', 30);
+        }
+      } else if (z.zombieType !== 'exploder') {
+        // Ghost can't deal contact damage while transparent
+        if (z.zombieType === 'ghost' && !z.ghostSolid) {
+          // pass through
+        } else {
+          let a = Math.atan2(player.y - z.y, player.x - z.x);
+          let overlap = z.radius + player.radius - dist;
+          z.x -= Math.cos(a) * overlap * 0.5;
+          z.y -= Math.sin(a) * overlap * 0.5;
+
+          if (player.iFrames <= 0 && z.attackCooldown <= 0) {
+            let rawDmg = z.isBoss && z.bossCharging ? Math.floor(z.damage * 1.5) : z.damage;
+            let finalDmg = Math.max(1, Math.floor(rawDmg * (1 - dmgReduction)));
+            player.hp -= finalDmg;
+            player.iFrames = 30;
+            player.damageFlash = 10;
+            z.attackCooldown = 60;
+            stats.damageTaken += finalDmg;
+            addFloatingText(player.x, player.y - 30, `-${finalDmg}`, '#f44');
+            spawnParticles(player.x, player.y, '#f44', 8);
+            if (z.bossCharging) z.bossCharging = false;
+            if (player.hp <= 0) {
+              player.hp = 0;
+              let waveSurvived = wave - 1;
+              if (waveSurvived > highScore) {
+                highScore = waveSurvived;
+                localStorage.setItem('blobSurvivorHighScore', highScore.toString());
+              }
+              screen = 'dead';
+              spawnParticles(player.x, player.y, '#f44', 30);
+            }
+          }
+        }
+      }
+    }
+
+    // Zombie-zombie separation (ghosts pass through)
+    if (z.zombieType !== 'ghost') {
+      for (let j = i + 1; j < zombies.length; j++) {
+        let z2 = zombies[j];
+        if (z2.zombieType === 'ghost') continue;
+        let d = Math.hypot(z.x - z2.x, z.y - z2.y);
+        if (d < z.radius + z2.radius && d > 0) {
+          let sep = (z.radius + z2.radius - d) / 2;
+          let ax = (z.x - z2.x) / d, ay = (z.y - z2.y) / d;
+          z.x += ax * sep; z.y += ay * sep;
+          z2.x -= ax * sep; z2.y -= ay * sep;
+        }
+      }
+    }
+
+    // Remove dead zombies
+    if (z.hp <= 0) {
+      let xpGain = z.isBoss ? 30 + wave * 5 : (z.zombieType === 'mini' ? 4 + wave : 8 + wave * 2);
+      // Spawn XP orb instead of direct XP
+      xpOrbs.push({ x: z.x, y: z.y, amount: xpGain, life: 600 });
+      addFloatingText(z.x, z.y - 20, `+${xpGain} XP`, '#ff0');
+      let zColor = getZombieColor(z);
+      spawnParticles(z.x, z.y, z.isBoss ? '#a3f' : zColor, z.isBoss ? 25 : 12);
+      score++;
+      stats.kills++;
+      if (z.isBoss) stats.bossesKilled++;
+
+      // Splitter: spawn 2 mini zombies on death
+      if (z.zombieType === 'splitter') {
+        spawnMiniZombie(z.x, z.y, wave);
+        spawnMiniZombie(z.x, z.y, wave);
+      }
+
+      zombies.splice(i, 1);
+    }
+  }
+
+  // XP Orbs
+  let magnetRange = UPGRADES.magnet.range[upgradeLevels.magnet];
+  for (let i = xpOrbs.length - 1; i >= 0; i--) {
+    let orb = xpOrbs[i];
+    orb.life--;
+    if (orb.life <= 0) { xpOrbs.splice(i, 1); continue; }
+    let d = Math.hypot(orb.x - player.x, orb.y - player.y);
+    if (d < magnetRange) {
+      // Drift toward player
+      let a = Math.atan2(player.y - orb.y, player.x - orb.x);
+      let pullSpeed = 3 + (magnetRange - d) / magnetRange * 5;
+      orb.x += Math.cos(a) * pullSpeed;
+      orb.y += Math.sin(a) * pullSpeed;
+    }
+    // Collect on contact
+    if (d < player.radius + 8) {
+      xp += orb.amount;
+      stats.xpCollected += orb.amount;
+      // Level up check
+      while (xp >= xpToNext) {
+        xp -= xpToNext;
+        level++;
+        let reward = moneyForLevel(level);
+        money += reward;
+        stats.moneyEarned += reward;
+        xpToNext = xpForLevel(level);
+        addFloatingText(player.x, player.y - 50, `LEVEL ${level}! +$${reward}`, '#ff0');
+        spawnParticles(player.x, player.y, '#ff0', 15);
+        player.hp = Math.min(player.hp + 15, player.maxHp);
+      }
+      xpOrbs.splice(i, 1);
+    }
+  }
+
+  // Gun auto-fire
+  let gunLvl = upgradeLevels.gun;
+  if (gunLvl > 0) {
+    gunCooldown--;
+    if (gunCooldown <= 0) {
+      let gunRange = UPGRADES.gun.range[gunLvl];
+      let closest = null, closestDist = Infinity;
+      for (let z of zombies) {
+        if (z.zombieType === 'ghost' && !z.ghostSolid) continue;
+        let d = Math.hypot(z.x - player.x, z.y - player.y);
+        if (d < gunRange && d < closestDist) {
+          closest = z;
+          closestDist = d;
+        }
+      }
+      if (closest) {
+        let a = Math.atan2(closest.y - player.y, closest.x - player.x);
+        bullets.push({
+          x: player.x, y: player.y,
+          vx: Math.cos(a) * 8, vy: Math.sin(a) * 8,
+          damage: UPGRADES.gun.damage[gunLvl],
+          life: 60
+        });
+        gunCooldown = UPGRADES.gun.fireRate[gunLvl];
+      }
+    }
+  }
+
+  // Update bullets
+  for (let i = bullets.length - 1; i >= 0; i--) {
+    let b = bullets[i];
+    b.x += b.vx; b.y += b.vy;
+    b.life--;
+    if (b.life <= 0 || b.x < 0 || b.x > CW || b.y < 0 || b.y > CH) {
+      bullets.splice(i, 1);
+      continue;
+    }
+    for (let j = zombies.length - 1; j >= 0; j--) {
+      let z = zombies[j];
+      if (z.zombieType === 'ghost' && !z.ghostSolid) continue;
+      if (Math.hypot(b.x - z.x, b.y - z.y) < z.radius + 4) {
+        z.hp -= b.damage;
+        z.hitFlash = 6;
+        stats.damageDealt += b.damage;
+        spawnParticles(b.x, b.y, '#fa0', 3);
+        bullets.splice(i, 1);
+        break;
+      }
+    }
+  }
+
+  // Acid bullets (from spitters)
+  for (let i = acidBullets.length - 1; i >= 0; i--) {
+    let ab = acidBullets[i];
+    ab.x += ab.vx; ab.y += ab.vy;
+    ab.life--;
+    if (ab.life <= 0 || ab.x < 0 || ab.x > CW || ab.y < 0 || ab.y > CH) {
+      acidBullets.splice(i, 1);
+      continue;
+    }
+    if (Math.hypot(ab.x - player.x, ab.y - player.y) < player.radius + 5) {
+      if (player.iFrames <= 0) {
+        let finalDmg = Math.max(1, Math.floor(ab.damage * (1 - dmgReduction)));
+        player.hp -= finalDmg;
+        player.iFrames = 20;
+        player.damageFlash = 8;
+        stats.damageTaken += finalDmg;
+        addFloatingText(player.x, player.y - 30, `-${finalDmg} ☠`, '#a4f');
+        spawnParticles(player.x, player.y, '#a4f', 5);
+        if (player.hp <= 0) {
+          player.hp = 0;
+          let waveSurvived = wave - 1;
+          if (waveSurvived > highScore) {
+            highScore = waveSurvived;
+            localStorage.setItem('blobSurvivorHighScore', highScore.toString());
+          }
+          screen = 'dead';
+          spawnParticles(player.x, player.y, '#f44', 30);
+        }
+      }
+      acidBullets.splice(i, 1);
+    }
+  }
+
+  // ── Boomerang ──
+  let boomLvl = upgradeLevels.boomerang;
+  if (boomLvl > 0) {
+    boomerangCooldown--;
+    if (boomerangCooldown <= 0) {
+      let boomRange = UPGRADES.boomerang.range[boomLvl];
+      let closest = null, closestDist = Infinity;
+      for (let z of zombies) {
+        if (z.zombieType === 'ghost' && !z.ghostSolid) continue;
+        let d = Math.hypot(z.x - player.x, z.y - player.y);
+        if (d < boomRange * 2 && d < closestDist) { closest = z; closestDist = d; }
+      }
+      if (closest) {
+        let a = Math.atan2(closest.y - player.y, closest.x - player.x);
+        boomerangs.push({
+          x: player.x, y: player.y, angle: a,
+          distanceTraveled: 0, maxDist: boomRange,
+          returning: false, originX: player.x, originY: player.y,
+          speed: 6, damage: UPGRADES.boomerang.damage[boomLvl]
+        });
+        boomerangCooldown = UPGRADES.boomerang.fireRate[boomLvl];
+      }
+    }
+  }
+  for (let i = boomerangs.length - 1; i >= 0; i--) {
+    let b = boomerangs[i];
+    if (!b.returning) {
+      b.x += Math.cos(b.angle) * b.speed;
+      b.y += Math.sin(b.angle) * b.speed;
+      b.distanceTraveled += b.speed;
+      if (b.distanceTraveled >= b.maxDist) b.returning = true;
+    } else {
+      let a = Math.atan2(player.y - b.y, player.x - b.x);
+      b.x += Math.cos(a) * b.speed;
+      b.y += Math.sin(a) * b.speed;
+      if (Math.hypot(b.x - player.x, b.y - player.y) < player.radius + 10) {
+        boomerangs.splice(i, 1); continue;
+      }
+    }
+    if (b.x < -50 || b.x > CW+50 || b.y < -50 || b.y > CH+50) { boomerangs.splice(i, 1); continue; }
+    for (let z of zombies) {
+      if (z.zombieType === 'ghost' && !z.ghostSolid) continue;
+      if (z.hitFlash > 0) continue;
+      if (Math.hypot(b.x - z.x, b.y - z.y) < z.radius + 8) {
+        z.hp -= b.damage; z.hitFlash = 8;
+        stats.damageDealt += b.damage;
+        spawnParticles(z.x, z.y, '#8cf', 3);
+      }
+    }
+  }
+
+  // ── Lightning Chain ──
+  let ltLvl = upgradeLevels.lightning;
+  if (ltLvl > 0) {
+    lightningCooldown--;
+    if (lightningCooldown <= 0) {
+      let ltRange = UPGRADES.lightning.chainRange[ltLvl] * 3;
+      let closest = null, closestDist = Infinity;
+      for (let z of zombies) {
+        if (z.zombieType === 'ghost' && !z.ghostSolid) continue;
+        let d = Math.hypot(z.x - player.x, z.y - player.y);
+        if (d < ltRange && d < closestDist) { closest = z; closestDist = d; }
+      }
+      if (closest) {
+        let ltDmg = UPGRADES.lightning.damage[ltLvl];
+        let chains = UPGRADES.lightning.chainCount[ltLvl];
+        let chainR = UPGRADES.lightning.chainRange[ltLvl];
+        let hitSet = new Set();
+        let current = closest;
+        let points = [[player.x, player.y]];
+        for (let c = 0; c <= chains && current; c++) {
+          current.hp -= ltDmg; current.hitFlash = 8;
+          stats.damageDealt += ltDmg;
+          hitSet.add(current);
+          points.push([current.x, current.y]);
+          spawnParticles(current.x, current.y, '#ff0', 3);
+          let next = null, nextD = Infinity;
+          for (let z of zombies) {
+            if (hitSet.has(z)) continue;
+            if (z.zombieType === 'ghost' && !z.ghostSolid) continue;
+            let d = Math.hypot(z.x - current.x, z.y - current.y);
+            if (d < chainR && d < nextD) { next = z; nextD = d; }
+          }
+          current = next;
+        }
+        lightningEffects.push({ points, life: 10 });
+        lightningCooldown = UPGRADES.lightning.fireRate[ltLvl];
+      }
+    }
+  }
+  for (let i = lightningEffects.length - 1; i >= 0; i--) {
+    lightningEffects[i].life--;
+    if (lightningEffects[i].life <= 0) lightningEffects.splice(i, 1);
+  }
+
+  // ── Orbital Shield ──
+  let orbLvl = upgradeLevels.orbital;
+  if (orbLvl > 0) {
+    orbitalAngle += 0.04;
+    let orbCount = UPGRADES.orbital.orbCount[orbLvl];
+    let orbDmg = UPGRADES.orbital.damage[orbLvl];
+    let orbR = UPGRADES.orbital.orbRadius[orbLvl];
+    for (let o = 0; o < orbCount; o++) {
+      let oa = orbitalAngle + o * (Math.PI * 2 / orbCount);
+      let ox = player.x + Math.cos(oa) * orbR;
+      let oy = player.y + Math.sin(oa) * orbR;
+      for (let z of zombies) {
+        if (z.zombieType === 'ghost' && !z.ghostSolid) continue;
+        if (z.hitFlash > 0) continue;
+        if (Math.hypot(ox - z.x, oy - z.y) < z.radius + 8) {
+          z.hp -= orbDmg; z.hitFlash = 10;
+          stats.damageDealt += orbDmg;
+          spawnParticles(z.x, z.y, '#48f', 3);
+        }
+      }
+    }
+  }
+
+  // ── Flamethrower ──
+  let flameLvl = upgradeLevels.flamethrower;
+  if (flameLvl > 0) {
+    flameCooldown--;
+    if (flameCooldown <= 0) {
+      let flameRange = UPGRADES.flamethrower.range[flameLvl];
+      let flameDmg = UPGRADES.flamethrower.damage[flameLvl];
+      let burnDur = UPGRADES.flamethrower.burnDuration[flameLvl];
+      let hitAny = false;
+      for (let z of zombies) {
+        if (z.zombieType === 'ghost' && !z.ghostSolid) continue;
+        let d = Math.hypot(z.x - player.x, z.y - player.y);
+        if (d < flameRange + z.radius) {
+          let toZ = Math.atan2(z.y - player.y, z.x - player.x);
+          let aDiff = Math.abs(angleDelta(player.angle, toZ));
+          if (aDiff < Math.PI / 6) {
+            z.burnTimer = burnDur;
+            z.burnDmg = flameDmg;
+            z.hitFlash = 4;
+            hitAny = true;
+          }
+        }
+      }
+      if (hitAny) {
+        flameCooldown = UPGRADES.flamethrower.fireRate[flameLvl];
+        for (let fp = 0; fp < 5; fp++) {
+          let fa = player.angle + (Math.random() - 0.5) * (Math.PI / 3);
+          let fd = 20 + Math.random() * flameRange * 0.8;
+          spawnParticles(player.x + Math.cos(fa) * fd, player.y + Math.sin(fa) * fd, Math.random() > 0.5 ? '#f60' : '#fa0', 1);
+        }
+      }
+    }
+  }
+
+  // ── Freeze Ray ──
+  let frzLvl = upgradeLevels.freeze;
+  if (frzLvl > 0) {
+    freezeCooldown--;
+    if (freezeCooldown <= 0) {
+      let frzRange = UPGRADES.freeze.range[frzLvl];
+      let frzSlow = UPGRADES.freeze.slowFactor[frzLvl];
+      let frzDur = UPGRADES.freeze.duration[frzLvl];
+      let hitAny = false;
+      for (let z of zombies) {
+        if (z.zombieType === 'ghost' && !z.ghostSolid) continue;
+        let d = Math.hypot(z.x - player.x, z.y - player.y);
+        if (d < frzRange + z.radius) {
+          let toZ = Math.atan2(z.y - player.y, z.x - player.x);
+          let aDiff = Math.abs(angleDelta(player.angle, toZ));
+          if (aDiff < Math.PI / 12) {
+            z.slowTimer = frzDur;
+            z.slowFactor = frzSlow;
+            hitAny = true;
+          }
+        }
+      }
+      if (hitAny) {
+        freezeCooldown = UPGRADES.freeze.fireRate[frzLvl];
+        freezeBeamTimer = 10;
+        freezeBeamAngle = player.angle;
+      }
+    }
+  }
+  if (freezeBeamTimer > 0) freezeBeamTimer--;
+
+  // ── Poison Cloud ──
+  let poisLvl = upgradeLevels.poison;
+  if (poisLvl > 0) {
+    poisonCooldown--;
+    if (poisonCooldown <= 0) {
+      poisonClouds.push({
+        x: player.x, y: player.y,
+        radius: UPGRADES.poison.radius[poisLvl],
+        damage: UPGRADES.poison.damage[poisLvl],
+        life: UPGRADES.poison.duration[poisLvl],
+        maxLife: UPGRADES.poison.duration[poisLvl],
+        tickCounter: 0
+      });
+      poisonCooldown = UPGRADES.poison.fireRate[poisLvl];
+    }
+  }
+  for (let i = poisonClouds.length - 1; i >= 0; i--) {
+    let pc = poisonClouds[i];
+    pc.life--;
+    pc.tickCounter++;
+    if (pc.life <= 0) { poisonClouds.splice(i, 1); continue; }
+    if (pc.tickCounter % 20 === 0) {
+      for (let z of zombies) {
+        if (z.zombieType === 'ghost' && !z.ghostSolid) continue;
+        if (Math.hypot(z.x - pc.x, z.y - pc.y) < pc.radius + z.radius) {
+          z.hp -= pc.damage; z.hitFlash = 4;
+          stats.damageDealt += pc.damage;
+        }
+      }
+    }
+  }
+
+  // Next wave
+  if (zombies.length === 0 && zombiesLeft <= 0) {
+    bossSpawned = false;
+    nextWave();
+  }
+
+  // Particles
+  for (let i = particles.length - 1; i >= 0; i--) {
+    let p = particles[i];
+    p.x += p.vx; p.y += p.vy;
+    p.vx *= 0.95; p.vy *= 0.95;
+    p.life--;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+
+  // Floating texts
+  for (let i = floatingTexts.length - 1; i >= 0; i--) {
+    let ft = floatingTexts[i];
+    ft.y -= 0.8;
+    ft.life--;
+    if (ft.life <= 0) floatingTexts.splice(i, 1);
+  }
+}
+
+function getZombieColor(z) {
+  if (z.isBoss) {
+    let bid = z.bossId || 'brute';
+    switch(bid) {
+      case 'brute': return '#6a2e8a';
+      case 'inferno': return '#a02000';
+      case 'frost_titan': return '#1a5080';
+      case 'necro_lord': return '#3a0050';
+      case 'hydra': return '#206830';
+      case 'hydra_mini': return '#308040';
+      default: return '#6a2e8a';
+    }
+  }
+  switch(z.zombieType) {
+    case 'runner': return '#cc4';
+    case 'tank': return '#8b2020';
+    case 'spitter': return '#9040c0';
+    case 'splitter': return '#60d060';
+    case 'exploder': return '#e06020';
+    case 'ghost': return '#dde';
+    case 'necromancer': return '#502080';
+    case 'mini': return '#70c070';
+    default: return '#3a7a3a';
+  }
+}
+
+// ── Draw ───────────────────────────────────────────────
+function draw() {
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(0, 0, CW, CH);
+
+  if (screen === 'title') { drawTitle(); return; }
+  if (screen === 'shop') { drawShop(); return; }
+
+  drawArena();
+
+  if (screen === 'dead') drawDeathScreen();
+}
+
+function drawGrid() {
+  ctx.strokeStyle = '#222240';
+  ctx.lineWidth = 1;
+  for (let x = 0; x < CW; x += 40) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,CH); ctx.stroke(); }
+  for (let y = 0; y < CH; y += 40) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(CW,y); ctx.stroke(); }
+}
+
+function drawTitle() {
+  drawGrid();
+
+  // Decorative zombies in background
+  let t = titlePulse;
+  for (let i = 0; i < 8; i++) {
+    let a = (Math.PI * 2 / 8) * i + t * 0.3;
+    let zx = CW/2 + Math.cos(a) * 200;
+    let zy = CH/2 + Math.sin(a) * 150;
+    ctx.fillStyle = '#3a7a3a';
+    ctx.globalAlpha = 0.4;
+    ctx.beginPath(); ctx.arc(zx, zy, 18, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#c00';
+    ctx.beginPath(); ctx.arc(zx-5, zy-3, 3, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(zx+5, zy-3, 3, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // Title
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#5599ee';
+  ctx.font = 'bold 60px monospace';
+  ctx.fillText('WOBBLE WARFARE', CW/2, CH/2 - 80);
+
+  // Subtitle with sword
+  ctx.fillStyle = '#aaa';
+  ctx.font = '18px monospace';
+  ctx.fillText('⚔️  Survive the zombie horde  ⚔️', CW/2, CH/2 - 40);
+
+  // High score
+  if (highScore > 0) {
+    ctx.fillStyle = '#ff0';
+    ctx.font = 'bold 16px monospace';
+    ctx.fillText(`🏆 Best: Wave ${highScore}`, CW/2, CH/2);
+  }
+
+  // Start prompt
+  let pulse = 0.6 + Math.sin(titlePulse * 2) * 0.4;
+  ctx.globalAlpha = pulse;
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 24px monospace';
+  ctx.fillText('CLICK TO START', CW/2, CH/2 + 60);
+  ctx.globalAlpha = 1;
+
+  // Controls
+  ctx.fillStyle = '#666';
+  ctx.font = '13px monospace';
+  ctx.fillText('WASD to move  •  Mouse to aim  •  Space to slash  •  Shift to dash', CW/2, CH/2 + 120);
+  ctx.fillText('Q for shockwave  •  B for shop  •  Weapons auto-fire', CW/2, CH/2 + 140);
+}
+
+function drawArena() {
+  drawGrid();
+
+  // Shockwave effect
+  if (shockwaveEffect > 0) {
+    let progress = 1 - shockwaveEffect / 20;
+    let r = SHOCKWAVE_RADIUS * progress;
+    ctx.globalAlpha = shockwaveEffect / 20 * 0.5;
+    ctx.strokeStyle = '#4af';
+    ctx.lineWidth = 4 - progress * 3;
+    ctx.beginPath(); ctx.arc(player.x, player.y, r, 0, Math.PI*2); ctx.stroke();
+    ctx.globalAlpha = shockwaveEffect / 20 * 0.15;
+    ctx.fillStyle = '#4af';
+    ctx.beginPath(); ctx.arc(player.x, player.y, r, 0, Math.PI*2); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  // Particles
+  for (let p of particles) {
+    ctx.globalAlpha = p.life / p.maxLife;
+    ctx.fillStyle = p.color;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.radius, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // XP Orbs
+  for (let orb of xpOrbs) {
+    let orbAlpha = Math.min(1, orb.life / 60);
+    ctx.globalAlpha = orbAlpha * 0.8;
+    ctx.fillStyle = '#ff0';
+    ctx.shadowColor = '#ff0';
+    ctx.shadowBlur = 8;
+    ctx.beginPath(); ctx.arc(orb.x, orb.y, 5, 0, Math.PI*2); ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = orbAlpha * 0.4;
+    ctx.fillStyle = '#ffa';
+    ctx.beginPath(); ctx.arc(orb.x, orb.y, 3, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // Gun range indicator
+  if (upgradeLevels.gun > 0) {
+    let gunRange = UPGRADES.gun.range[upgradeLevels.gun];
+    ctx.globalAlpha = 0.08;
+    ctx.strokeStyle = '#f84';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.arc(player.x, player.y, gunRange, 0, Math.PI*2); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+  }
+
+  // Bullets
+  for (let b of bullets) {
+    ctx.fillStyle = '#fa0';
+    ctx.beginPath(); ctx.arc(b.x, b.y, 4, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#ff0';
+    ctx.beginPath(); ctx.arc(b.x, b.y, 2, 0, Math.PI*2); ctx.fill();
+  }
+
+  // Acid bullets
+  for (let ab of acidBullets) {
+    ctx.fillStyle = '#a4f';
+    ctx.beginPath(); ctx.arc(ab.x, ab.y, 5, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#c8f';
+    ctx.beginPath(); ctx.arc(ab.x, ab.y, 3, 0, Math.PI*2); ctx.fill();
+  }
+
+  // Zombies
+  for (let z of zombies) {
+    // Boss aura
+    if (z.isBoss) {
+      let bid = z.bossId || 'brute';
+      let auraC = bid === 'inferno' ? '#f60' : bid === 'frost_titan' ? '#4cf' : bid === 'necro_lord' ? '#a0f' : bid === 'hydra' || bid === 'hydra_mini' ? '#4f4' : '#a3f';
+      ctx.globalAlpha = 0.2 + Math.sin(titlePulse * 3) * 0.1;
+      ctx.fillStyle = auraC;
+      ctx.beginPath(); ctx.arc(z.x, z.y, z.radius + 10, 0, Math.PI*2); ctx.fill();
+      // Frost Titan extra ring
+      if (bid === 'frost_titan') {
+        ctx.globalAlpha = 0.08 + Math.sin(titlePulse * 2) * 0.04;
+        ctx.strokeStyle = '#4cf';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(z.x, z.y, 160, 0, Math.PI*2); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // Ghost transparency
+    if (z.zombieType === 'ghost') {
+      ctx.globalAlpha = z.ghostSolid ? 0.9 : 0.25;
+    }
+
+    // Exploder pulsing aura
+    if (z.zombieType === 'exploder') {
+      let pulse = 0.3 + Math.sin(titlePulse * 6) * 0.2;
+      ctx.globalAlpha = pulse;
+      ctx.fillStyle = '#f44';
+      ctx.beginPath(); ctx.arc(z.x, z.y, z.radius + 6, 0, Math.PI*2); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    // Necromancer aura
+    if (z.zombieType === 'necromancer') {
+      ctx.globalAlpha = 0.15 + Math.sin(titlePulse * 2) * 0.1;
+      ctx.fillStyle = '#808';
+      ctx.beginPath(); ctx.arc(z.x, z.y, z.radius + 8, 0, Math.PI*2); ctx.fill();
+      ctx.globalAlpha = z.zombieType === 'ghost' ? (z.ghostSolid ? 0.9 : 0.25) : 1;
+    }
+
+    // Body
+    let baseColor = getZombieColor(z);
+    ctx.fillStyle = z.hitFlash > 0 ? '#fff' : baseColor;
+    ctx.beginPath(); ctx.arc(z.x, z.y, z.radius, 0, Math.PI*2); ctx.fill();
+
+    // Eyes
+    let eyeA = Math.atan2(player.y - z.y, player.x - z.x);
+    let eyeSize = z.isBoss ? 5 : (z.zombieType === 'mini' ? 2 : 3);
+    let eyeColor;
+    if (z.isBoss) {
+      let bid = z.bossId || 'brute';
+      eyeColor = bid === 'inferno' ? '#ff0' : bid === 'frost_titan' ? '#aef' : bid === 'necro_lord' ? '#f0f' : bid === 'hydra' || bid === 'hydra_mini' ? '#8f8' : '#f0f';
+    } else {
+      eyeColor = z.zombieType === 'ghost' ? '#88f' : (z.zombieType === 'necromancer' ? '#f0f' : '#c00');
+    }
+    for (let side of [-0.4, 0.4]) {
+      let ex = z.x + Math.cos(eyeA + side) * z.radius * 0.5;
+      let ey = z.y + Math.sin(eyeA + side) * z.radius * 0.5;
+      ctx.fillStyle = eyeColor;
+      ctx.beginPath(); ctx.arc(ex, ey, eyeSize, 0, Math.PI*2); ctx.fill();
+    }
+
+    // Boss weapon
+    if (z.isBoss) {
+      let bid = z.bossId || 'brute';
+      ctx.save();
+      ctx.translate(z.x, z.y);
+      if (bid === 'brute') {
+        // Mace
+        let wAngle = eyeA + (z.bossCharging ? 0 : Math.sin(titlePulse * 4) * 0.3);
+        ctx.rotate(wAngle);
+        ctx.strokeStyle = '#654'; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(z.radius, 0); ctx.lineTo(z.radius + 30, 0); ctx.stroke();
+        ctx.fillStyle = z.bossCharging ? '#f44' : '#888';
+        ctx.beginPath(); ctx.arc(z.radius + 34, 0, 8, 0, Math.PI*2); ctx.fill();
+        for (let s = 0; s < 6; s++) {
+          let sa = (Math.PI*2/6)*s;
+          ctx.fillStyle = '#aaa';
+          ctx.beginPath(); ctx.arc(z.radius+34 + Math.cos(sa)*10, Math.sin(sa)*10, 2, 0, Math.PI*2); ctx.fill();
+        }
+      } else if (bid === 'inferno') {
+        // Flaming fists
+        ctx.rotate(eyeA);
+        for (let side of [-0.6, 0.6]) {
+          let fx = z.radius * Math.cos(side), fy = z.radius * Math.sin(side);
+          ctx.fillStyle = '#f80';
+          ctx.beginPath(); ctx.arc(fx + 10, fy, 7, 0, Math.PI*2); ctx.fill();
+          ctx.fillStyle = '#ff0';
+          ctx.beginPath(); ctx.arc(fx + 10, fy, 4 + Math.sin(titlePulse * 8) * 2, 0, Math.PI*2); ctx.fill();
+        }
+      } else if (bid === 'frost_titan') {
+        // Ice crystal crown
+        for (let c = 0; c < 5; c++) {
+          let ca = (Math.PI*2/5)*c + titlePulse * 0.5;
+          let cx = Math.cos(ca) * (z.radius + 8), cy = Math.sin(ca) * (z.radius + 8);
+          ctx.fillStyle = '#8df';
+          ctx.beginPath(); ctx.moveTo(cx, cy - 8); ctx.lineTo(cx - 4, cy + 4); ctx.lineTo(cx + 4, cy + 4); ctx.closePath(); ctx.fill();
+        }
+      } else if (bid === 'necro_lord') {
+        // Skull staff
+        let wAngle = eyeA + Math.sin(titlePulse * 2) * 0.2;
+        ctx.rotate(wAngle);
+        ctx.strokeStyle = '#432'; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(z.radius, 0); ctx.lineTo(z.radius + 28, 0); ctx.stroke();
+        ctx.fillStyle = '#ddd';
+        ctx.beginPath(); ctx.arc(z.radius + 30, 0, 6, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#f0f';
+        ctx.beginPath(); ctx.arc(z.radius + 28, -2, 2, 0, Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.arc(z.radius + 32, -2, 2, 0, Math.PI*2); ctx.fill();
+      } else if (bid === 'hydra' || bid === 'hydra_mini') {
+        // Multiple heads (tendrils)
+        let headCount = bid === 'hydra' ? 3 : 2;
+        for (let h = 0; h < headCount; h++) {
+          let ha = eyeA + (h - (headCount-1)/2) * 0.5 + Math.sin(titlePulse * 3 + h) * 0.15;
+          ctx.strokeStyle = '#3a5'; ctx.lineWidth = 3;
+          ctx.beginPath(); ctx.moveTo(Math.cos(ha)*z.radius, Math.sin(ha)*z.radius);
+          ctx.lineTo(Math.cos(ha)*(z.radius+22), Math.sin(ha)*(z.radius+22)); ctx.stroke();
+          ctx.fillStyle = '#4f4';
+          ctx.beginPath(); ctx.arc(Math.cos(ha)*(z.radius+24), Math.sin(ha)*(z.radius+24), 5, 0, Math.PI*2); ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+
+    // Necromancer staff
+    if (z.zombieType === 'necromancer') {
+      ctx.save();
+      ctx.translate(z.x, z.y);
+      ctx.rotate(eyeA);
+      ctx.strokeStyle = '#543';
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(z.radius, 0); ctx.lineTo(z.radius + 20, 0); ctx.stroke();
+      ctx.fillStyle = '#f0f';
+      ctx.beginPath(); ctx.arc(z.radius + 22, 0, 4, 0, Math.PI*2); ctx.fill();
+      ctx.restore();
+    }
+
+    // HP bar
+    if (z.hp < z.maxHp) {
+      let bw = z.radius * 2, bh = z.isBoss ? 6 : 4;
+      let bx = z.x - bw/2, by = z.y - z.radius - (z.isBoss ? 16 : 10);
+      ctx.fillStyle = '#600';
+      ctx.fillRect(bx, by, bw, bh);
+      let hpColor = z.isBoss ? (z.bossId === 'inferno' ? '#f80' : z.bossId === 'frost_titan' ? '#4cf' : z.bossId === 'necro_lord' ? '#a0f' : z.bossId === 'hydra' || z.bossId === 'hydra_mini' ? '#4f4' : '#f4f') : (z.zombieType === 'tank' ? '#f88' : '#f44');
+      ctx.fillStyle = hpColor;
+      ctx.fillRect(bx, by, bw * (z.hp / z.maxHp), bh);
+    }
+    // Boss label
+    if (z.isBoss) {
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 11px monospace';
+      ctx.fillStyle = '#f4f';
+      ctx.fillText('BOSS', z.x, z.y - z.radius - 20);
+    }
+
+    // Reset alpha after ghost
+    if (z.zombieType === 'ghost') {
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // Player (blink when invincible)
+  let blink = player.iFrames > 0 && Math.floor(player.iFrames / 3) % 2;
+  if (!blink) {
+    // Shield aura
+    if (upgradeLevels.shield > 0) {
+      ctx.globalAlpha = 0.15 + upgradeLevels.shield * 0.05;
+      ctx.strokeStyle = '#68f';
+      ctx.lineWidth = 2 + upgradeLevels.shield;
+      ctx.beginPath(); ctx.arc(player.x, player.y, player.radius + 6, 0, Math.PI*2); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
+    // Dash visual
+    if (dashTimer > 0) {
+      ctx.globalAlpha = 0.4;
+      ctx.fillStyle = '#4af';
+      ctx.beginPath(); ctx.arc(player.x, player.y, player.radius + 4, 0, Math.PI*2); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    ctx.fillStyle = player.damageFlash > 0 ? '#f88' : '#5599ee';
+    ctx.beginPath(); ctx.arc(player.x, player.y, player.radius, 0, Math.PI*2); ctx.fill();
+
+    for (let side of [-0.35, 0.35]) {
+      let ex = player.x + Math.cos(player.angle + side) * player.radius * 0.45;
+      let ey = player.y + Math.sin(player.angle + side) * player.radius * 0.45;
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(ex, ey, 4, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#112';
+      ctx.beginPath();
+      ctx.arc(ex + Math.cos(player.angle)*1.5, ey + Math.sin(player.angle)*1.5, 2, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+
+  // Sword
+  let swordLen = UPGRADES.sword.length[upgradeLevels.sword];
+  let swordColor = ['#dde','#cef','#aff','#8ff','#ff0','#f80','#f44','#f0f','#4ff','#fff','#ffd700'][upgradeLevels.sword];
+  if (swinging) {
+    let progress = 1 - swingTimer / SWING_DURATION;
+    let sAngle = player.angle - SWORD_ARC/2 + SWORD_ARC * progress;
+    drawSword(sAngle, 1, swordLen, swordColor);
+    for (let t = 0; t < 4; t++) {
+      let tp = Math.max(0, progress - t * 0.08);
+      let ta = player.angle - SWORD_ARC/2 + SWORD_ARC * tp;
+      ctx.globalAlpha = 0.15 - t * 0.03;
+      drawSword(ta, 0.7, swordLen, swordColor);
+    }
+    ctx.globalAlpha = 1;
+  } else {
+    drawSword(player.angle, 1, swordLen, swordColor);
+  }
+
+  // ── Draw Boomerangs ──
+  for (let b of boomerangs) {
+    ctx.save();
+    ctx.translate(b.x, b.y);
+    ctx.rotate(titlePulse * 8);
+    ctx.fillStyle = '#8cf';
+    ctx.beginPath();
+    ctx.arc(0, 0, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#5af';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, 7, 0, Math.PI);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // ── Draw Lightning Effects ──
+  for (let le of lightningEffects) {
+    ctx.globalAlpha = le.life / 10;
+    ctx.strokeStyle = '#ff0';
+    ctx.lineWidth = 2;
+    for (let p = 0; p < le.points.length - 1; p++) {
+      let [x1, y1] = le.points[p];
+      let [x2, y2] = le.points[p + 1];
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      let segs = 4;
+      let dx = (x2 - x1) / segs, dy = (y2 - y1) / segs;
+      let perpX = -dy, perpY = dx;
+      let pLen = Math.sqrt(perpX*perpX + perpY*perpY) || 1;
+      perpX /= pLen; perpY /= pLen;
+      for (let s = 1; s < segs; s++) {
+        let off = (Math.random() - 0.5) * 20;
+        ctx.lineTo(x1 + dx*s + perpX*off, y1 + dy*s + perpY*off);
+      }
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+    // Glow
+    ctx.strokeStyle = '#ffa';
+    ctx.lineWidth = 4;
+    ctx.globalAlpha *= 0.3;
+    for (let p = 0; p < le.points.length - 1; p++) {
+      ctx.beginPath();
+      ctx.moveTo(le.points[p][0], le.points[p][1]);
+      ctx.lineTo(le.points[p+1][0], le.points[p+1][1]);
+      ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  // ── Draw Orbital Shield ──
+  if (upgradeLevels.orbital > 0) {
+    let orbCount = UPGRADES.orbital.orbCount[upgradeLevels.orbital];
+    let orbR = UPGRADES.orbital.orbRadius[upgradeLevels.orbital];
+    for (let o = 0; o < orbCount; o++) {
+      let oa = orbitalAngle + o * (Math.PI * 2 / orbCount);
+      let ox = player.x + Math.cos(oa) * orbR;
+      let oy = player.y + Math.sin(oa) * orbR;
+      ctx.fillStyle = '#48f';
+      ctx.shadowColor = '#48f';
+      ctx.shadowBlur = 10;
+      ctx.beginPath(); ctx.arc(ox, oy, 7, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#8bf';
+      ctx.beginPath(); ctx.arc(ox, oy, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+  }
+
+  // ── Draw Flamethrower Cone ──
+  if (upgradeLevels.flamethrower > 0 && flameCooldown > UPGRADES.flamethrower.fireRate[upgradeLevels.flamethrower] - 5) {
+    let flameRange = UPGRADES.flamethrower.range[upgradeLevels.flamethrower];
+    ctx.globalAlpha = 0.25;
+    ctx.fillStyle = '#f60';
+    ctx.beginPath();
+    ctx.moveTo(player.x, player.y);
+    ctx.arc(player.x, player.y, flameRange, player.angle - Math.PI/6, player.angle + Math.PI/6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  // ── Draw Freeze Beam ──
+  if (freezeBeamTimer > 0) {
+    let frzRange = UPGRADES.freeze.range[upgradeLevels.freeze];
+    ctx.globalAlpha = freezeBeamTimer / 10 * 0.6;
+    ctx.strokeStyle = '#4ef';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(player.x, player.y);
+    ctx.lineTo(player.x + Math.cos(freezeBeamAngle) * frzRange, player.y + Math.sin(freezeBeamAngle) * frzRange);
+    ctx.stroke();
+    ctx.strokeStyle = '#aff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(player.x, player.y);
+    ctx.lineTo(player.x + Math.cos(freezeBeamAngle) * frzRange, player.y + Math.sin(freezeBeamAngle) * frzRange);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // ── Draw Poison Clouds ──
+  for (let pc of poisonClouds) {
+    let alpha = Math.min(0.35, pc.life / pc.maxLife * 0.4);
+    let pulse = 1 + Math.sin(titlePulse * 4 + pc.x) * 0.1;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = '#4a2';
+    ctx.beginPath(); ctx.arc(pc.x, pc.y, pc.radius * pulse, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = alpha * 0.6;
+    ctx.fillStyle = '#6c4';
+    ctx.beginPath(); ctx.arc(pc.x, pc.y, pc.radius * 0.6 * pulse, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  // Floating texts
+  for (let ft of floatingTexts) {
+    ctx.globalAlpha = ft.life / ft.maxLife;
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 14px monospace';
+    ctx.fillStyle = ft.color;
+    ctx.fillText(ft.text, ft.x, ft.y);
+  }
+  ctx.globalAlpha = 1;
+
+  // ── HUD ──
+  // HP Bar
+  let hpBarW = 200, hpBarH = 18, hpX = 20, hpY = 20;
+  ctx.fillStyle = '#333';
+  roundRect(hpX, hpY, hpBarW, hpBarH, 4);
+  let hpRatio = Math.max(0, player.hp / player.maxHp);
+  ctx.fillStyle = hpRatio > 0.5 ? '#4c4' : hpRatio > 0.25 ? '#ca4' : '#c44';
+  roundRect(hpX, hpY, hpBarW * hpRatio, hpBarH, 4);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 13px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(`HP: ${player.hp} / ${player.maxHp}`, hpX + hpBarW/2, hpY + 14);
+
+  // XP Bar
+  let xpBarW = 200, xpBarH = 10, xpX = 20, xpY = 44;
+  ctx.fillStyle = '#333';
+  roundRect(xpX, xpY, xpBarW, xpBarH, 3);
+  ctx.fillStyle = '#66f';
+  roundRect(xpX, xpY, xpBarW * (xp / xpToNext), xpBarH, 3);
+  ctx.fillStyle = '#aaf';
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(`LVL ${level}  (${xp}/${xpToNext} XP)`, xpX + xpBarW/2, xpY + 9);
+
+  // Money
+  ctx.textAlign = 'left';
+  ctx.font = 'bold 14px monospace';
+  ctx.fillStyle = '#fd0';
+  ctx.fillText(`💰 $${money}`, 20, 72);
+
+  // Dash cooldown indicator
+  let cdY = 88;
+  ctx.font = '11px monospace';
+  if (dashCooldown > 0) {
+    ctx.fillStyle = '#888';
+    ctx.fillText(`Dash: ${Math.ceil(dashCooldown/60)}s`, 20, cdY);
+  } else {
+    ctx.fillStyle = '#4af';
+    ctx.fillText('Dash: READY [Shift]', 20, cdY);
+  }
+
+  // Shockwave cooldown indicator
+  cdY += 14;
+  if (shockwaveCooldown > 0) {
+    ctx.fillStyle = '#888';
+    ctx.fillText(`Shockwave: ${Math.ceil(shockwaveCooldown/60)}s`, 20, cdY);
+  } else {
+    ctx.fillStyle = '#4af';
+    ctx.fillText('Shockwave: READY [Q]', 20, cdY);
+  }
+
+  // Wave & kills (top right)
+  ctx.textAlign = 'right';
+  ctx.font = 'bold 22px monospace';
+  ctx.fillStyle = '#eee';
+  ctx.fillText(`WAVE ${wave}`, CW - 20, 36);
+  if (wave % 10 === 0 && zombies.some(z => z.isBoss)) {
+    ctx.fillStyle = '#f4f';
+    ctx.font = 'bold 14px monospace';
+    ctx.fillText('⚠ BOSS WAVE', CW - 20, 54);
+  }
+  ctx.font = '14px monospace';
+  ctx.fillStyle = '#aaa';
+  ctx.fillText(`Kills: ${score}`, CW - 20, wave % 10 === 0 && zombies.some(z=>z.isBoss) ? 72 : 56);
+
+  // Zombies remaining
+  let remaining = zombies.length + zombiesLeft;
+  if (remaining > 0) {
+    ctx.textAlign = 'center';
+    ctx.font = '13px monospace';
+    ctx.fillStyle = '#888';
+    ctx.fillText(`Zombies remaining: ${remaining}`, CW/2, 30);
+  }
+
+  // Shop hint
+  ctx.textAlign = 'center';
+  ctx.font = '12px monospace';
+  ctx.fillStyle = '#555';
+  ctx.fillText('[B] Shop  •  [Space] Slash  •  [Shift] Dash  •  [Q] Shockwave', CW/2, CH - 12);
+
+  // High score
+  if (highScore > 0) {
+    ctx.textAlign = 'right';
+    ctx.font = '12px monospace';
+    ctx.fillStyle = '#886';
+    ctx.fillText(`Best: Wave ${highScore}`, CW - 20, CH - 12);
+  }
+}
+
+function drawShop() {
+  drawGrid();
+
+  ctx.fillStyle = 'rgba(0,0,0,0.75)';
+  ctx.fillRect(0, 0, CW, CH);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fd0';
+  ctx.font = 'bold 32px monospace';
+  ctx.fillText('⚔️  SHOP  ⚔️', CW/2, 50);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 16px monospace';
+  ctx.fillText(`💰 $${money}`, CW/2, 78);
+
+  ctx.fillStyle = '#888';
+  ctx.font = '11px monospace';
+  ctx.fillText(`Level ${level}  •  Wave ${wave}`, CW/2, 98);
+
+  let itemKeys = Object.keys(UPGRADES);
+  let startY = 140;
+  let itemSpacing = 50;
+  let clipTop = 110, clipBottom = 570, clipH = clipBottom - clipTop;
+
+  // Clipping region for scrollable items
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, clipTop, CW, clipH);
+  ctx.clip();
+
+  for (let i = 0; i < itemKeys.length; i++) {
+    let key = itemKeys[i];
+    let up = UPGRADES[key];
+    let lvl = upgradeLevels[key];
+    let maxed = lvl >= up.maxLevel;
+    let cost = maxed ? 0 : up.costs[lvl];
+    let canAfford = money >= cost;
+    let selected = i === shopSelection;
+    let iy = startY + i * itemSpacing - shopScroll;
+
+    // Skip items outside visible area
+    if (iy + itemSpacing < clipTop || iy > clipBottom) continue;
+
+    // Selection highlight
+    if (selected) {
+      ctx.fillStyle = 'rgba(255,255,255,0.06)';
+      ctx.fillRect(CW/2 - 240, iy - 3, 480, itemSpacing - 4);
+      ctx.strokeStyle = '#fd0';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(CW/2 - 240, iy - 3, 480, itemSpacing - 4);
+    }
+
+    // Icon & name
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 15px monospace';
+    ctx.fillStyle = up.color;
+    ctx.fillText(`${up.icon} ${up.name}`, CW/2 - 225, iy + 12);
+
+    // Level pips (compact for 10 levels)
+    let pipX = CW/2 - 225;
+    let pipY = iy + 20;
+    for (let p = 0; p < up.maxLevel; p++) {
+      ctx.fillStyle = p < lvl ? up.color : '#444';
+      ctx.fillRect(pipX + p * 14, pipY, 10, 4);
+    }
+
+    // Description
+    ctx.font = '11px monospace';
+    ctx.fillStyle = '#aaa';
+    ctx.fillText(up.desc(lvl), CW/2 - 225, iy + 38);
+
+    // Next level info
+    ctx.textAlign = 'right';
+    if (maxed) {
+      ctx.font = 'bold 14px monospace';
+      ctx.fillStyle = '#4c4';
+      ctx.fillText('MAX', CW/2 + 225, iy + 12);
+    } else {
+      ctx.font = '11px monospace';
+      ctx.fillStyle = '#888';
+      ctx.fillText(`Next: ${up.desc(lvl+1)}`, CW/2 + 225, iy + 8);
+      ctx.font = 'bold 14px monospace';
+      ctx.fillStyle = canAfford ? '#fd0' : '#844';
+      ctx.fillText(`$${cost}`, CW/2 + 225, iy + 26);
+      if (selected && canAfford) {
+        ctx.fillStyle = '#4c4';
+        ctx.font = 'bold 11px monospace';
+        ctx.fillText('[ CLICK / ENTER ]', CW/2 + 225, iy + 40);
+      } else if (selected && !canAfford) {
+        ctx.fillStyle = '#844';
+        ctx.font = '11px monospace';
+        ctx.fillText('Not enough $', CW/2 + 225, iy + 40);
+      }
+    }
+  }
+
+  // Play / continue button
+  let playBtnY = startY + itemKeys.length * itemSpacing + 10 - shopScroll;
+  if (playBtnY > clipTop && playBtnY < clipBottom) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#4c4';
+    ctx.font = 'bold 18px monospace';
+    let pulse = 0.7 + Math.sin(titlePulse * 2) * 0.3;
+    ctx.globalAlpha = pulse;
+    ctx.fillText('[ START OVER  —  B / ESC ]', CW/2, playBtnY + 20);
+    ctx.globalAlpha = 1;
+  }
+
+  ctx.restore(); // Remove clip
+
+  // Scroll indicators
+  let maxScroll = Math.max(0, itemKeys.length * itemSpacing + 60 - clipH);
+  if (shopScroll > 0) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#888';
+    ctx.font = '14px monospace';
+    ctx.fillText('▲ scroll up ▲', CW/2, clipTop + 12);
+  }
+  if (shopScroll < maxScroll) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#888';
+    ctx.font = '14px monospace';
+    ctx.fillText('▼ scroll down ▼', CW/2, clipBottom - 4);
+  }
+
+  // Controls help
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#555';
+  ctx.font = '11px monospace';
+  ctx.fillText('W/S or ↑/↓ to browse  •  Scroll wheel  •  Enter/Click to buy  •  B/Esc to close', CW/2, CH - 14);
+}
+
+function drawDeathScreen() {
+  ctx.fillStyle = 'rgba(0,0,0,0.75)';
+  ctx.fillRect(0, 0, CW, CH);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#f44';
+  ctx.font = 'bold 48px monospace';
+  ctx.fillText('YOU DIED', CW/2, 80);
+
+  let wavesSurvived = wave - 1;
+
+  // New high score?
+  if (wavesSurvived >= highScore && wavesSurvived > 0) {
+    ctx.fillStyle = '#ff0';
+    ctx.font = 'bold 16px monospace';
+    ctx.fillText('🏆 NEW HIGH SCORE! 🏆', CW/2, 108);
+  } else if (highScore > 0) {
+    ctx.fillStyle = '#886';
+    ctx.font = '14px monospace';
+    ctx.fillText(`Best: Wave ${highScore}`, CW/2, 108);
+  }
+
+  // Stats panel
+  let panelX = CW/2 - 200, panelY = 125, panelW = 400, panelH = 340;
+  ctx.fillStyle = 'rgba(30,30,50,0.85)';
+  ctx.fillRect(panelX, panelY, panelW, panelH);
+  ctx.strokeStyle = '#555';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(panelX, panelY, panelW, panelH);
+
+  ctx.fillStyle = '#fd0';
+  ctx.font = 'bold 18px monospace';
+  ctx.fillText('— RUN STATS —', CW/2, panelY + 28);
+
+  let timeSec = Math.floor(stats.timeSurvived / 60);
+  let timeMin = Math.floor(timeSec / 60);
+  let timeStr = timeMin > 0 ? `${timeMin}m ${timeSec % 60}s` : `${timeSec}s`;
+
+  let statLines = [
+    ['Waves Survived', `${wavesSurvived}`],
+    ['Time Survived', timeStr],
+    ['Total Kills', `${stats.kills}`],
+    ['Bosses Killed', `${stats.bossesKilled}`],
+    ['Damage Dealt', `${stats.damageDealt}`],
+    ['Damage Taken', `${stats.damageTaken}`],
+    ['XP Collected', `${stats.xpCollected}`],
+    ['Money Earned', `$${stats.moneyEarned}`],
+    ['Dashes Used', `${stats.dashesUsed}`],
+    ['Shockwaves Used', `${stats.shockwavesUsed}`],
+    ['Player Level', `${level}`]
+  ];
+
+  let sy = panelY + 52;
+  ctx.font = '14px monospace';
+  for (let i = 0; i < statLines.length; i++) {
+    let ly = sy + i * 24;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#aaa';
+    ctx.fillText(statLines[i][0], panelX + 30, ly);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#fff';
+    ctx.fillText(statLines[i][1], panelX + panelW - 30, ly);
+  }
+
+  // Money
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fd0';
+  ctx.font = 'bold 16px monospace';
+  ctx.fillText(`💰 You have $${money}`, CW/2, panelY + panelH + 30);
+
+  let pulse = 0.6 + Math.sin(titlePulse * 2) * 0.4;
+  ctx.globalAlpha = pulse;
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 20px monospace';
+  ctx.fillText('Click to open Shop & Start Over', CW/2, panelY + panelH + 65);
+  ctx.globalAlpha = 1;
+}
+
+function drawSword(angle, alpha, len, bladeColor) {
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  ctx.translate(player.x, player.y);
+  ctx.rotate(angle);
+  ctx.strokeStyle = '#654';
+  ctx.lineWidth = 5;
+  ctx.beginPath(); ctx.moveTo(player.radius-2,0); ctx.lineTo(player.radius+8,0); ctx.stroke();
+  ctx.strokeStyle = '#aa8';
+  ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(player.radius+8,-6); ctx.lineTo(player.radius+8,6); ctx.stroke();
+  ctx.strokeStyle = bladeColor;
+  ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(player.radius+8,0); ctx.lineTo(player.radius+len,0); ctx.stroke();
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(player.radius+len-5,-2);
+  ctx.lineTo(player.radius+len+3,0);
+  ctx.lineTo(player.radius+len-5,2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function roundRect(x,y,w,h,r) {
+  if (w <= 0) return;
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.lineTo(x+w-r,y);
+  ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+  ctx.lineTo(x+w,y+h-r);
+  ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+  ctx.lineTo(x+r,y+h);
+  ctx.quadraticCurveTo(x,y+h,x,y+h-r);
+  ctx.lineTo(x,y+r);
+  ctx.quadraticCurveTo(x,y,x+r,y);
+  ctx.fill();
+}
+
+function angleDelta(a,b) {
+  let d = b - a;
+  while (d > Math.PI) d -= Math.PI*2;
+  while (d < -Math.PI) d += Math.PI*2;
+  return d;
+}
+
+// ── Game Loop ──────────────────────────────────────────
+function loop() { update(); draw(); requestAnimationFrame(loop); }
+init();
+screen = 'title';
+loop();
+</script>
+</body>
+</html>
