@@ -1,4 +1,4 @@
-# 🟢 Wobble Warfare
+# 🟢 Wobble Warfare 
 
 A blob survival game co-created by **Bear**, **Bobby**, and **GitHub Copilot CLI**.
 
